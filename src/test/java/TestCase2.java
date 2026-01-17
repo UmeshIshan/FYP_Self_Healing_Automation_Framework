@@ -5,7 +5,7 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 import org.testng.asserts.SoftAssert;
 
-public class TestCase1 extends TestBase {
+public class TestCase2 extends TestBase {
     SoftAssert softAssert = new SoftAssert();
 
     //This is a testing test case
@@ -19,10 +19,11 @@ public class TestCase1 extends TestBase {
     @Test
     public void VerifyTextInWidgetTest(){
 
-        softAssert.assertEquals(driver.getTitle(),"DEMOQA", "Title should contain DEMOQA");
+        softAssert.assertEquals(driver.getTitle(),"Swag Labs", "Title should contain DEMOQA");
         System.out.println(">>> TEST START");
-        TestFunction.navigateToWidgets();
-        TestFunction.clickOnElements();
+        TestFunction.userNameInput("standard_user");
+        TestFunction.passwordInput("secret_sauce");
+        TestFunction.clickLoginBtn();
         System.out.println(">>> TEST END");
         softAssert.assertAll();
     }
@@ -31,5 +32,4 @@ public class TestCase1 extends TestBase {
     public void teardown(){
         //driver.quit();
     }
-
 }

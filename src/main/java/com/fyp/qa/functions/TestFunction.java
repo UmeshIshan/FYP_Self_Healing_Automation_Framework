@@ -9,6 +9,22 @@ public class TestFunction {
         testPage.clickOnWidgets();
     }
 
+    public static void clickOnElements(){
+        testPage.clickOnElements();
+    }
+
+    public static void userNameInput(String userName){
+        testPage.userNameInput(userName);
+    }
+
+    public static void passwordInput(String password){
+        testPage.passwordInput(password);
+    }
+
+    public static void clickLoginBtn(){
+        testPage.clickLoginBtn();
+    }
+
 
 
 }

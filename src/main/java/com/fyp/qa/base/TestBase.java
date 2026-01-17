@@ -32,6 +32,10 @@ public class TestBase {
                     wait = new WebDriverWait(driver, Duration.ofSeconds(30));
                     driver.manage().timeouts().implicitlyWait(Duration.ofSeconds(30));
                     driver.get(Constants.MAIN_URL);
+
+                    // Always reset context
+                    driver.switchTo().defaultContent();
+
                     webUI = new UIActionBase(driver,wait);
 
                     LOGGER.info("WebDriver initialized and navigated to the URL: " + Constants.MAIN_URL);
@@ -41,6 +45,16 @@ public class TestBase {
             }else {
                 LOGGER.warning("Unsupported browser or WebDriver is already initialized.");
             }
+        }
+    }
+
+    // Method to close the browser and clean up resources
+    public static void closeAllBrowsers() {
+        if (driver != null) {
+//            driver.close();
+            driver.quit();
+            driver = null;  // Reset the driver to allow re-initialization in future tests
+            LOGGER.info("All browsers are closed.");
         }
     }
 
