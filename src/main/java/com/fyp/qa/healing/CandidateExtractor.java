@@ -33,6 +33,23 @@ public class CandidateExtractor {
                         "  return !!r && r.width>=2 && r.height>=2;\n" +
                         "}\n" +
                         "function attr(e,n){ return safeStr(e.getAttribute(n)); }\n" +
+
+                        // ---------- LABEL EXTRACTION ----------
+                        "function labelText(e){\n" +
+                        "  try {\n" +
+                        "    if(!e) return '';\n" +
+                        "    if (e.closest) {\n" +
+                        "      const lab = e.closest('label');\n" +
+                        "      if (lab) return safeStr(lab.innerText);\n" +
+                        "    }\n" +
+                        "    const id = safeStr(e.id);\n" +
+                        "    if(!id) return '';\n" +
+                        "    const lab2 = document.querySelector('label[for=\"'+id.replace(/\"/g,'\\\\\"')+'\"]');\n" +
+                        "    return safeStr(lab2 ? lab2.innerText : '');\n" +
+                        "  } catch(ex) { return ''; }\n" +
+                        "}\n" +
+
+                        // ---------- XPATH HELPERS ----------
                         "function xpathLiteral(s){\n" +
                         "  s = safeStr(s);\n" +
                         "  if (s.indexOf(\"'\")===-1) return \"'\"+s+\"'\";\n" +
@@ -42,6 +59,8 @@ public class CandidateExtractor {
                         "  for(let i=0;i<parts.length;i++){ if(parts[i].length) out.push(\"'\"+parts[i]+\"'\"); if(i!==parts.length-1) out.push('\"\\\\\\''+'\"'); }\n" +
                         "  return 'concat('+out.join(',')+')';\n" +
                         "}\n" +
+
+                        // ---------- STABLE XPATH ----------
                         "function stableXPath(e){\n" +
                         "  const tag=(e.tagName||'').toLowerCase();\n" +
                         "  const id=safeStr(e.id);\n" +
@@ -62,22 +81,36 @@ public class CandidateExtractor {
                         "  }\n" +
                         "  return '//'+parts.join('/');\n" +
                         "}\n" +
+
+                        // ---------- COLLECT CANDIDATES ----------
                         "const sel = arguments[0] || 'input,textarea,button,a[href],[role=\"button\"],[role=\"textbox\"],[contenteditable=\"true\"],[aria-label],[data-testid],[data-test],[data-qa]';\n" +
                         "const cap = arguments[1] || 200;\n" +
                         "const els = Array.from(document.querySelectorAll(sel)).filter(isVisible).slice(0, cap);\n" +
                         "return els.map((e,i)=>({\n" +
                         "  xpath: stableXPath(e),\n" +
-                        "  text: safeStr(e.innerText || e.value || ''),\n" +
+
+                        // 👇 IMPORTANT: enriched text blob (synonym-resistant, safe)
+                        "  text: (\n" +
+                        "    safeStr(e.innerText || e.value || '') + ' ' +\n" +
+                        "    labelText(e) + ' ' +\n" +
+                        "    attr(e,'placeholder') + ' ' +\n" +
+                        "    attr(e,'aria-label') + ' ' +\n" +
+                        "    attr(e,'name') + ' ' +\n" +
+                        "    safeStr(e.id) + ' ' +\n" +
+                        "    (attr(e,'data-testid')||attr(e,'data-test')||attr(e,'data-qa'))\n" +
+                        "  ).trim(),\n" +
+
                         "  tag: (e.tagName||'').toLowerCase(),\n" +
                         "  idx: i,\n" +
-                        "  ariaLabel: attr(e,'aria-label'),\n" +
                         "  id: safeStr(e.id),\n" +
                         "  name: attr(e,'name'),\n" +
                         "  className: safeStr(e.className),\n" +
                         "  placeholder: attr(e,'placeholder'),\n" +
+                        "  ariaLabel: attr(e,'aria-label'),\n" +
                         "  type: attr(e,'type'),\n" +
                         "  dataTestId: (attr(e,'data-testid')||attr(e,'data-test')||attr(e,'data-qa'))\n" +
                         "}));";
+
 
 
         Object rawObj = ((JavascriptExecutor) driver).executeScript(js, cssSelector, maxCandidates);

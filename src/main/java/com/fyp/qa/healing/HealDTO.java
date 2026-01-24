@@ -17,15 +17,19 @@ public class HealDTO {
     }
 
     public static class OldElement {
-        public String text;
-        public String tag;
+        public String text;     // hint / label / token
+        public String tag;      // expected tag
+        public String xpath;    // the failing xpath (important!)
+        public String intent;   // canonical intent (password/username/etc.)
         public Integer idx;
 
         public OldElement() {}
 
-        public OldElement(String text, String tag, Integer idx) {
+        public OldElement(String text, String tag, String xpath, String intent, Integer idx) {
             this.text = text;
             this.tag = tag;
+            this.xpath = xpath;
+            this.intent = intent;
             this.idx = idx;
         }
     }

@@ -8,17 +8,13 @@ public class TestPage extends TestBase {
     By widgetOption2 = By.xpath("//div[contains(text(),'Widg')]");
     By elements = By.xpath("//div[contains(text(),'Elements')]");
     By userNameTxt = By.xpath("//div[@placeholder='Username']");
-    By passwordTxt = By.xpath("//span[@id='password']");
+    By passwordTxt = By.xpath("//input[@id='passcode']");
     By loginBtn = By.xpath("//input[@data-test='login']");
 
 
 
     public void clickOnWidgets(){
-//        webUI.scrollToElementTillFound(widgetOption);
-
-        //webUI.openURL("https://calendar.google.com/calendar/u/1/r/week");
         webUI.click(widgetOption);
-        //webUI.sendKeys(By.xpath("//h5[contains(text(),'Widgets')]"),"test");
     }
 
     public void clickOnElements(){

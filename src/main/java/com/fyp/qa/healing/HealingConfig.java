@@ -11,11 +11,12 @@ public class HealingConfig {
     public boolean allowVerifiedOverride = true;
     public double minModelScore = 0.0;          // raw score gate (temporary)
     public boolean requireSanityCheck = true;   // safer acceptance
-
+    public boolean enableIntentGate = true;
+    public boolean intentGateStrict = true;
 
     public HealingConfig() {
         // default threshold for accepting healed locators
-        this.confidenceThreshold = 0.05d;
+        this.confidenceThreshold = 0.55d;
     }
 
     public HealingConfig(boolean enabled, String apiUrl, int maxCandidates, int waitSeconds) {
@@ -23,7 +24,7 @@ public class HealingConfig {
         this.apiUrl = apiUrl;
         this.maxCandidates = maxCandidates;
         this.waitSeconds = waitSeconds;
-        this.confidenceThreshold = 0.05d;
+        this.confidenceThreshold = 0.55d;
     }
 
     public HealingConfig(boolean enabled, String apiUrl, int maxCandidates, int waitSeconds, double confidenceThreshold) {

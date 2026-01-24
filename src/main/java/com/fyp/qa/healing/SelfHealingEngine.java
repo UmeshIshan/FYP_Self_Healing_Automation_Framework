@@ -42,6 +42,8 @@ public class SelfHealingEngine {
         HealDTO.OldElement old = new HealDTO.OldElement(
                 safe(expectedText),
                 safe(expectedTag),
+                safe(oldXpath),
+                normalizeIntent(extractIntentToken(oldXpath)),
                 0
         );
 
@@ -58,6 +60,19 @@ public class SelfHealingEngine {
 
         HealDTO.HealResponse resp = client.heal(req);
 
+        // 🔍 DEBUG: API payload candidates preview
+        if (candidates != null) {
+            int limit = Math.min(candidates.size(), 15); // prevent huge logs
+            logger.info("HEAL DEBUG: sending {} candidates to API (showing first {})", candidates.size(), limit);
+
+            for (int i = 0; i < limit; i++) {
+                HealDTO.Candidate c = candidates.get(i);
+                logger.info("  API_CAND[{}] xpath={} | tag={} | text='{}' | id={} | dataTestId={} | idx={}",
+                        i, safe(c.xpath), safe(c.tag), safe(c.text), safe(c.id), safe(c.dataTestId), c.idx);
+            }
+        }
+
+
         long ms = System.currentTimeMillis() - start;
         logger.info("HEAL: API returned in {} ms decision={} confidence={} healed={}",
                 ms,
@@ -65,8 +80,16 @@ public class SelfHealingEngine {
                 (resp == null ? -1.0 : resp.confidence),
                 (resp == null ? "null" : resp.healed_xpath));
 
-        if (resp == null) return null;
-        if (resp.healed_xpath == null || resp.healed_xpath.isBlank()) return null;
+        if (resp == null) {
+            HealResult r = new HealResult(null, null, 0.0d, "MANUAL_REVIEW_API_NULL");
+            r.reason = "API returned null response";
+            return r;
+        }
+        if (resp.healed_xpath == null || resp.healed_xpath.isBlank()) {
+            HealResult r = new HealResult(null, null, resp.confidence, "MANUAL_REVIEW_NO_XPATH");
+            r.reason = "API returned empty healed_xpath decision=" + resp.decision;
+            return r;
+        }
 
         logger.warn("Healer response: decision={} confidence={} healed_xpath={}",
                 resp.decision, resp.confidence, resp.healed_xpath);
@@ -97,15 +120,69 @@ public class SelfHealingEngine {
 
             // STEP 1: ML heal (existing)
             String expectedTag = inferTagFromXpath(oldXpath);
-            String expectedText = extractBestHintFromXpath(oldXpath);
+
+            // If action is SEND_KEYS, expectedTag should not restrict to wrong tags like span/div
+            if (safe(config.actionName).toLowerCase().contains("sendkeys") || safe(config.actionName).toLowerCase().contains("type")) {
+                expectedTag = "input";
+            }
+
+            String expectedText = normalizeHint(extractBestHintFromXpath(oldXpath));
+
+            // reinforce with canonical intent token (password/username/login/etc.)
+            String intentTok = normalizeIntent(extractIntentToken(oldXpath));
+            if (!intentTok.isBlank() && !expectedText.toLowerCase().contains(intentTok)) {
+                expectedText = (expectedText + " " + intentTok).trim();
+            }
+
+
             // Extract candidates ONCE (tag-change resistant selector)
             String selector = actionSelector(config.actionName, expectedTag);
             List<HealDTO.Candidate> candidates = extractor.extract(config.maxCandidates, selector);
+
+            // 🔍 DEBUG: Print candidates sent to the API (ranker input)
+            if (candidates != null) {
+                logger.info("HEAL DEBUG: candidates dump (count={} selector='{}' expectedTag='{}' expectedText='{}')",
+                        candidates.size(), selector, expectedTag, expectedText);
+
+                for (int i = 0; i < candidates.size(); i++) {
+                    HealDTO.Candidate c = candidates.get(i);
+
+                    logger.info("  CAND[{}] xpath={} | tag={} | text='{}' | id={} | name={} | placeholder='{}' | ariaLabel='{}' | dataTestId={} | idx={}",
+                            i,
+                            safe(c.xpath),
+                            safe(c.tag),
+                            safe(c.text),
+                            safe(c.id),
+                            safe(c.name),
+                            safe(c.placeholder),
+                            safe(c.ariaLabel),
+                            safe(c.dataTestId),
+                            c.idx
+                    );
+                }
+            } else {
+                logger.info("HEAL DEBUG: candidates is NULL");
+            }
+
 
             // ML heal using the same candidates (no repeated DOM work)
             HealResult result = healXPathResult(oldXpath, expectedText, expectedTag, candidates);
 
             if (result == null) return null;
+
+
+            if (config.enableIntentGate) {
+                String oldTok = normalizeIntent(extractIntentToken(oldXpath));
+                if (!oldTok.isBlank()) {
+                    // Prefer DOM-attribute check; only fallback to string heuristic if DOM lookup fails
+                    boolean ok = healedElementContainsToken(result.healedXpath, oldTok) || intentMatches(oldXpath, result.healedXpath);
+                    if (!ok) {
+                        result.decision = "REJECT_INTENT_MISMATCH";
+                        result.reason = "Intent mismatch: old=" + oldTok + " healed=" + result.healedXpath;
+                        return result;
+                    }
+                }
+            }
 
             // STEP 2: hard reject ad/iframe-like heals
             if (isAdLikeXpath(result.healedXpath)) {
@@ -117,7 +194,10 @@ public class SelfHealingEngine {
             result.matchCount = matches;   // <-- store for audit/logging
 
             // VERIFIED override should NOT bypass intent/action correctness
-            if (config.allowVerifiedOverride && matches == 1) {
+            if (config.allowVerifiedOverride
+                    && matches == 1
+                    && !"manual_review".equalsIgnoreCase(result.decision)
+                    && result.confidence >= config.confidenceThreshold) {
 
                 boolean sane;
 
@@ -131,7 +211,7 @@ public class SelfHealingEngine {
 
                 // 2) Intent sanity (prevents Email -> Username)
                 if (sane) {
-                    String intent = extractIntentToken(oldXpath);
+                    String intent = normalizeIntent(extractIntentToken(oldXpath));
 
                     // If old xpath contains strong intent but it's not present anywhere on the page, don't auto-heal
                     if (!intent.isBlank() && !anyCandidateContainsToken(candidates, intent)) {
@@ -253,7 +333,17 @@ public class SelfHealingEngine {
 
     private String extractIntentToken(String xpath) {
         if (xpath == null) return "";
-        String[] strong = {"email", "phone", "password", "otp", "zip", "address", "card", "cvv"};
+
+        List<String> strong = List.of(
+                "password", "passcode", "pwd",
+                "username", "user", "userid",
+                "email", "mail",
+                "login", "signin", "sign-in",
+                "submit", "confirm",
+                "search", "find",
+                "qty", "quantity",
+                "cart", "basket"
+        );
 
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("'([^']+)'|\"([^\"]+)\"").matcher(xpath);
         while (m.find()) {
@@ -267,6 +357,49 @@ public class SelfHealingEngine {
         return "";
     }
 
+    private String normalizeIntent(String token) {
+        if (token == null) return "";
+        token = token.trim().toLowerCase();
+
+        // collapse synonyms to a canonical intent
+        return switch (token) {
+            // password synonyms
+            case "passcode", "pwd", "passwd", "pass", "pin" -> "password";
+
+            // username synonyms
+            case "user", "userid", "uname", "loginid" -> "username";
+
+            // login synonyms
+            case "signin", "sign-in", "signon", "logon" -> "login";
+
+            // email synonyms
+            case "mail", "e-mail", "emailaddress" -> "email";
+
+            // quantity synonyms
+            case "qty", "quant", "amount" -> "quantity";
+
+            default -> token;
+        };
+    }
+
+    private boolean intentMatches(String oldXpath, String healedXpath) {
+        String oldTok = normalizeIntent(extractIntentToken(oldXpath));
+        if (oldTok.isBlank()) return true; // no intent extracted -> don’t block
+
+        // if healed xpath contains any synonym/canonical form, allow
+        String hx = (healedXpath == null) ? "" : healedXpath.toLowerCase();
+        if (hx.contains(oldTok)) return true;
+
+        // also accept if healed xpath contains one of known synonyms for that canonical intent
+        if ("password".equals(oldTok) && (hx.contains("passcode") || hx.contains("pwd"))) return true;
+        if ("username".equals(oldTok) && (hx.contains("user") || hx.contains("userid"))) return true;
+        if ("login".equals(oldTok) && (hx.contains("signin") || hx.contains("sign-in"))) return true;
+
+        return false;
+    }
+
+
+
     private boolean healedElementContainsToken(String healedXpath, String token) {
         try {
             WebElement e = driver.findElement(By.xpath(healedXpath));
@@ -279,7 +412,26 @@ public class SelfHealingEngine {
                             safe(e.getAttribute("data-testid")) + " " +
                             safe(e.getAttribute("data-test")) + " " +
                             safe(e.getAttribute("data-qa"))).toLowerCase();
-            return fuzzyTokenMatch(blob, token);
+            String canon = normalizeIntent(token);
+
+            // allow canonical and known synonyms
+            if (fuzzyTokenMatch(blob, canon)) return true;
+
+            if ("password".equals(canon)) {
+                return fuzzyTokenMatch(blob, "passcode") || fuzzyTokenMatch(blob, "pwd");
+            }
+            if ("username".equals(canon)) {
+                return fuzzyTokenMatch(blob, "user") || fuzzyTokenMatch(blob, "userid");
+            }
+            if ("login".equals(canon)) {
+                return fuzzyTokenMatch(blob, "signin") || fuzzyTokenMatch(blob, "sign-in");
+            }
+            if ("email".equals(canon)) {
+                return fuzzyTokenMatch(blob, "mail");
+            }
+
+            return false;
+
         } catch (Exception ex) {
             return false;
         }
@@ -360,7 +512,8 @@ public class SelfHealingEngine {
 
     private boolean anyCandidateContainsToken(List<HealDTO.Candidate> candidates, String token) {
         if (candidates == null || candidates.isEmpty()) return false;
-        String needle = normalizeTokens(token);
+        String canon = normalizeIntent(token);
+        String needle = normalizeTokens(canon);
 
         for (HealDTO.Candidate c : candidates) {
             String blob = (
@@ -374,9 +527,42 @@ public class SelfHealingEngine {
             ).toLowerCase();
 
             if (fuzzyTokenMatch(blob, needle)) return true;
+
+            // synonyms
+            if ("password".equals(canon)) {
+                if (fuzzyTokenMatch(blob, "passcode") || fuzzyTokenMatch(blob, "pwd")) return true;
+            }
+            if ("username".equals(canon)) {
+                if (fuzzyTokenMatch(blob, "user") || fuzzyTokenMatch(blob, "userid")) return true;
+            }
+            if ("login".equals(canon)) {
+                if (fuzzyTokenMatch(blob, "signin") || fuzzyTokenMatch(blob, "sign-in")) return true;
+            }
+            if ("email".equals(canon)) {
+                if (fuzzyTokenMatch(blob, "mail")) return true;
+            }
         }
         return false;
     }
+
+
+    private String normalizeHint(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim().toLowerCase();
+
+        // convert separators into spaces so "sign-in" becomes "sign in"
+        s = s.replaceAll("[^a-z0-9]+", " ").replaceAll("\\s+", " ").trim();
+
+        // canonicalize each token using the same synonym collapsing
+        String[] parts = s.split(" ");
+        StringBuilder out = new StringBuilder();
+        for (String p : parts) {
+            String canon = normalizeIntent(p);
+            if (!canon.isBlank()) out.append(canon).append(" ");
+        }
+        return out.toString().trim();
+    }
+
 
 
 
