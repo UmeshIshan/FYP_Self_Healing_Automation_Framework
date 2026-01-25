@@ -9,7 +9,7 @@ public class TestPage extends TestBase {
     By elements = By.xpath("//div[contains(text(),'Elements')]");
     By userNameTxt = By.xpath("//div[@placeholder='Username']");
     By passwordTxt = By.xpath("//input[@id='passcode']");
-    By loginBtn = By.xpath("//input[@data-test='login']");
+    By loginBtn = By.xpath("//input[@data-test='trouser']");
 
 
 

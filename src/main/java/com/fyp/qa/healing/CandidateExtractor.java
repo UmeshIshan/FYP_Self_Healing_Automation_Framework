@@ -108,6 +108,7 @@ public class CandidateExtractor {
                         "  placeholder: attr(e,'placeholder'),\n" +
                         "  ariaLabel: attr(e,'aria-label'),\n" +
                         "  type: attr(e,'type'),\n" +
+                        "  value: safeStr(e.value),\n" +
                         "  dataTestId: (attr(e,'data-testid')||attr(e,'data-test')||attr(e,'data-qa'))\n" +
                         "}));";
 
@@ -131,12 +132,13 @@ public class CandidateExtractor {
             String placeholder = (String) r.get("placeholder");
             String type = (String) r.get("type");
             String dataTestId = (String) r.get("dataTestId");
+            String value = (String) r.get("value");
 
             if (xpath != null && !xpath.isBlank()) {
                 // ✅ Use the NEW overloaded constructor (keep your old constructor too)
                 out.add(new HealDTO.Candidate(
                         xpath, text, tag, idx, aria,
-                        id, name, className, placeholder, type, dataTestId
+                        id, name, className, placeholder, type, value, dataTestId
                 ));
             }
         }

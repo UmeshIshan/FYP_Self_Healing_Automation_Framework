@@ -17,15 +17,18 @@ public class HealDTO {
     }
 
     public static class OldElement {
-        public String text;     // hint / label / token
-        public String tag;      // expected tag
-        public String xpath;    // the failing xpath (important!)
-        public String intent;   // canonical intent (password/username/etc.)
-        public Integer idx;
+        public String text = "";
+        public String tag = "";
+
+        // ADD THESE
+        public String xpath = "";
+        public String intent = "";
+
+        public int idx = 0;
 
         public OldElement() {}
 
-        public OldElement(String text, String tag, String xpath, String intent, Integer idx) {
+        public OldElement(String text, String tag, String xpath, String intent, int idx) {
             this.text = text;
             this.tag = tag;
             this.xpath = xpath;
@@ -35,18 +38,19 @@ public class HealDTO {
     }
 
     public static class Candidate {
-        public String xpath;
-        public String text;
-        public String tag;
-        public Integer idx;
-        public String ariaLabel;
+        public String xpath = "";
+        public String text = "";
+        public String tag = "";
+        public Integer idx = 0;
+        public String ariaLabel = "";
 
-        public String id;
-        public String name;
-        public String className;
-        public String placeholder;
-        public String type;
-        public String dataTestId;
+        public String id = "";
+        public String name = "";
+        public String className = "";
+        public String placeholder = "";
+        public String type = "";
+        public String value = "";
+        public String dataTestId = "";
 
 
         public Candidate() {}
@@ -65,6 +69,7 @@ public class HealDTO {
             this.placeholder = "";
             this.type = "";
             this.dataTestId = "";
+            this.value = "";
         }
 
         // ✅ NEW OVERLOADED CONSTRUCTOR (use this from CandidateExtractor)
@@ -79,19 +84,21 @@ public class HealDTO {
                 String className,
                 String placeholder,
                 String type,
+                String value,
                 String dataTestId
         ) {
             this.xpath = xpath;
             this.text = text;
             this.tag = tag;
             this.idx = idx;
-            this.ariaLabel = ariaLabel;
+            this.ariaLabel = safe(ariaLabel);
 
             this.id = safe(id);
             this.name = safe(name);
             this.className = safe(className);
             this.placeholder = safe(placeholder);
             this.type = safe(type);
+            this.value = safe(value);
             this.dataTestId = safe(dataTestId);
         }
 

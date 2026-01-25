@@ -38,12 +38,13 @@ public class SelfHealingEngine {
      * otherwise returns null.
      */
     public HealResult healXPathResult(String oldXpath, String expectedText, String expectedTag, List<HealDTO.Candidate> candidates) throws Exception {
-        // candidates are provided by caller (avoid re-extraction)
+        String intentTok = normalizeIntent(extractIntentToken(oldXpath));
+
         HealDTO.OldElement old = new HealDTO.OldElement(
                 safe(expectedText),
                 safe(expectedTag),
                 safe(oldXpath),
-                normalizeIntent(extractIntentToken(oldXpath)),
+                safe(intentTok),
                 0
         );
 
@@ -138,6 +139,9 @@ public class SelfHealingEngine {
             // Extract candidates ONCE (tag-change resistant selector)
             String selector = actionSelector(config.actionName, expectedTag);
             List<HealDTO.Candidate> candidates = extractor.extract(config.maxCandidates, selector);
+
+            HealResult attrFb = attributeFallback(oldXpath, candidates);
+            if (attrFb != null) return attrFb;
 
             // 🔍 DEBUG: Print candidates sent to the API (ranker input)
             if (candidates != null) {
@@ -562,6 +566,52 @@ public class SelfHealingEngine {
         }
         return out.toString().trim();
     }
+
+    private HealResult attributeFallback(String oldXpath, List<HealDTO.Candidate> candidates) {
+        if (oldXpath == null || candidates == null || candidates.isEmpty()) return null;
+
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?:contains\\(\\s*@((?:data-testid|data-test|data-qa|id|name|placeholder))\\s*,\\s*['\\\"]([^'\\\"]+)['\\\"]\\s*\\)|@((?:data-testid|data-test|data-qa|id|name|placeholder))\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"])")
+                .matcher(oldXpath);
+
+        if (!m.find()) return null;
+
+        String attr = (m.group(1) != null ? m.group(1) : m.group(3));
+        String val  = (m.group(2) != null ? m.group(2) : m.group(4));
+
+        if (attr == null || val == null) return null;
+
+        attr = attr.trim().toLowerCase();
+        val = val.trim().toLowerCase();
+        if (val.isEmpty()) return null;
+
+        HealDTO.Candidate best = null;
+
+        for (HealDTO.Candidate c : candidates) {
+            String cand = "";
+
+            if ("id".equals(attr)) cand = safe(c.id);
+            else if ("name".equals(attr)) cand = safe(c.name);
+            else if ("placeholder".equals(attr)) cand = safe(c.placeholder);
+            else if ("data-testid".equals(attr) || "data-test".equals(attr) || "data-qa".equals(attr)) cand = safe(c.dataTestId);
+
+            cand = cand.toLowerCase();
+
+            if (cand.equals(val)) { best = c; break; }
+            if (best == null && (cand.contains(val) || val.contains(cand))) best = c;
+        }
+
+        if (best == null || best.xpath == null || best.xpath.trim().isEmpty()) return null;
+
+        int matches = countMatches(best.xpath);
+        if (matches == 1) {
+            return new HealResult(By.xpath(best.xpath), best.xpath, 1.0d, "AUTO_HEAL_ATTR_FALLBACK");
+        }
+        return null;
+    }
+
+
+
 
 
 
