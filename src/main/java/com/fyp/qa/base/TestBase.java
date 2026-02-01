@@ -1,5 +1,6 @@
 package com.fyp.qa.base;
 import com.fyp.qa.common.Constants;
+import org.openqa.selenium.Dimension;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.chrome.ChromeDriver;
@@ -24,6 +25,9 @@ public class TestBase {
                 try{
                     ChromeOptions chromeOptions = new ChromeOptions();
                     chromeOptions.addArguments("--start-maximized");
+                    chromeOptions.addArguments("--window-size=1920,1080");
+                    chromeOptions.addArguments("--disable-dev-shm-usage");
+                    chromeOptions.addArguments("--no-sandbox");
                     if(Constants.RUN_HEADLESS){
                         chromeOptions.addArguments("--headless", "--window-size=1920,1080");
                     }
@@ -56,6 +60,17 @@ public class TestBase {
             driver = null;  // Reset the driver to allow re-initialization in future tests
             LOGGER.info("All browsers are closed.");
         }
+    }
+
+    public static void setExternalDriver(WebDriver external) {
+        driver = external;
+        wait = new WebDriverWait(driver, Duration.ofSeconds(30));
+        js = (JavascriptExecutor) driver;
+
+        driver.manage().window().setSize(new Dimension(1920, 1080)); // ✅ force size
+        driver.switchTo().defaultContent();
+
+        webUI = new UIActionBase(driver, wait);
     }
 
 
