@@ -3,11 +3,10 @@ package com.fyp.qa.base;
 import com.fyp.qa.healing.HealResult;
 import com.fyp.qa.healing.HealingConfig;
 import com.fyp.qa.healing.SelfHealingEngine;
+import com.fyp.qa.base.RunLogContext;
 
 import org.openqa.selenium.*;
-
 import org.openqa.selenium.interactions.Actions;
-
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
 
@@ -23,7 +22,7 @@ public class UIActionBase {
     private final Actions actions;
     private static final Logger logger = LoggerFactory.getLogger(UIActionBase.class);
 
-    // ✅ Healing engine lives outside; UIActionBase only calls it on exception
+    // Healing engine
     private final HealingConfig healingConfig;
     private final SelfHealingEngine healingEngine;
 
@@ -32,17 +31,50 @@ public class UIActionBase {
         this.wait = wait;
         this.actions = new Actions(driver);
 
-        // ✅ You can later load from config/properties
-        this.healingConfig = new HealingConfig(true, "http://127.0.0.1:8000", 200, 5);
+        // You can set HEAL_API_URL in docker-compose for runner service.
+        String apiUrl = System.getenv().getOrDefault("HEAL_API_URL", "http://127.0.0.1:8000");
+
+        // You can later load these from config/properties
+        this.healingConfig = new HealingConfig(true, apiUrl, 200, 5);
         this.healingEngine = new SelfHealingEngine(driver, healingConfig);
+
+        // Useful once per session (shows in UI + IntelliJ)
+        uiInfo("🧩 UIActionBase initialized | healApi=" + apiUrl + " | threshold=" + healingConfig.confidenceThreshold);
+    }
+
+    private void uiInfo(String msg) {
+        // Website logs
+        RunLogContext.log(msg);
+        // IntelliJ / backend logs
+        logger.info(msg);
+    }
+
+    private void uiWarn(String msg) {
+        RunLogContext.log(msg);
+        logger.warn(msg);
+    }
+
+    private void uiError(String msg, Throwable t) {
+        RunLogContext.log(msg);
+        logger.error(msg, t);
+    }
+
+    private String exBrief(Throwable t) {
+        if (t == null) return "";
+        String m = t.getMessage();
+        if (m == null) m = "";
+        // keep UI logs readable
+        if (m.length() > 180) m = m.substring(0, 180) + "...";
+        return t.getClass().getSimpleName() + (m.isBlank() ? "" : (": " + m));
     }
 
     public UIActionBase openURL(String url) {
         try {
             driver.get(url);
-            logger.info("Opened URL: {}", url);
+            uiInfo("🌐 OPEN: " + url);
         } catch (Exception e) {
-            logger.error("Failed to open URL: {}", url, e);
+            uiError("🛑 OPEN failed: " + url + " | " + exBrief(e), e);
+            throw new RuntimeException("Failed to open URL: " + url, e);
         }
         return this;
     }
@@ -52,101 +84,128 @@ public class UIActionBase {
     // ----------------------
     public UIActionBase click(By by) {
         try {
-            logger.info("CLICK: Attempting locator={}", by);
+            uiInfo("➡️ CLICK: " + by);
 
             WebElement element = wait.until(ExpectedConditions.elementToBeClickable(by));
             element.click();
 
-            logger.info("CLICK: Success locator={}", by);
+            uiInfo("✅ CLICK success: " + by);
             return this;
 
         } catch (TimeoutException | NoSuchElementException | ElementClickInterceptedException e) {
-            logger.warn("CLICK: Failed locator={} | exception={}", by, e.getClass().getSimpleName(), e);
+            uiWarn("❌ CLICK failed: " + by + " | " + exBrief(e));
 
             // Try healing
-            logger.warn("HEAL: Invoking healer — originalLocator={}", by);
+            uiWarn("🩹 HEAL(click) start | original=" + by);
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {
-                logger.error("HEAL: Healing not possible (null result). original={}", by, e);
+                uiError("🛑 HEAL(click) null result | original=" + by, e);
                 throw new RuntimeException("Click failed and healing not possible for locator: " + by, e);
             }
 
-            logger.info("HEALER RESPONSE: original={} healed={} confidence={} decision={}", by, result.healedXpath, result.confidence, result.decision);
+            uiInfo("🧠 HEAL(click) response | original=" + by
+                    + " | healedXpath=" + result.healedXpath
+                    + " | confidence=" + result.confidence
+                    + " | decision=" + result.decision);
 
             if (shouldAutoHeal(result)) {
-                logger.info("HEAL: Accepted healed locator (threshold={}): original={} healed={} confidence={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence);
+                uiInfo("✅ HEAL(click) accepted | threshold=" + healingConfig.confidenceThreshold
+                        + " | original=" + by
+                        + " | healed=" + result.healedLocator
+                        + " | confidence=" + result.confidence);
 
                 try {
                     WebElement healedEl = wait.until(ExpectedConditions.elementToBeClickable(result.healedLocator));
                     healedEl.click();
-                    logger.warn("HEAL: Retry success. original={} healed={}", by, result.healedLocator);
+                    uiInfo("✅ HEAL(click) retry success | healed=" + result.healedLocator);
                     return this;
+
                 } catch (Exception healEx) {
-                    logger.error("HEAL: Retry FAILED. original={} healed={}", by, result.healedLocator, healEx);
+                    uiError("🛑 HEAL(click) retry failed | original=" + by
+                            + " | healed=" + result.healedLocator
+                            + " | " + exBrief(healEx), healEx);
                     throw new RuntimeException("Healed click failed. Old=" + by + " Healed=" + result.healedLocator, healEx);
                 }
 
             } else {
-                logger.error("HEAL: Rejected healed locator (threshold={}): original={} healed={} confidence={} decision={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence, result.decision);
+                uiWarn("⛔ HEAL(click) rejected | threshold=" + healingConfig.confidenceThreshold
+                        + " | original=" + by
+                        + " | healedXpath=" + result.healedXpath
+                        + " | confidence=" + result.confidence
+                        + " | decision=" + result.decision);
                 throw new RuntimeException("Healed locator rejected (low confidence). Old=" + by + " healed=" + result.healedXpath);
             }
 
         } catch (Exception e) {
-            logger.error("CLICK: Unexpected failure locator={} | exception={}", by, e.getClass().getSimpleName(), e);
+            uiError("🛑 CLICK unexpected error: " + by + " | " + exBrief(e), e);
             throw new RuntimeException("Unexpected click failure for locator: " + by, e);
         }
     }
-
 
     // ----------------------
     // SEND KEYS (with healing)
     // ----------------------
     public UIActionBase sendKeys(By by, String data) {
         try {
+            uiInfo("➡️ SENDKEYS: " + by + " | dataLen=" + (data == null ? 0 : data.length()));
+
             WebElement element = wait.until(ExpectedConditions.visibilityOfElementLocated(by));
             element.clear();
             element.sendKeys(data);
-            logger.info("Sent keys to element: {} data={}", by, data);
+
+            uiInfo("✅ SENDKEYS success: " + by);
 
         } catch (TimeoutException | NoSuchElementException e) {
-            logger.info("SENDKEYS: Failed locator={} | exception={}", by, e.getClass().getSimpleName(), e);
+            uiWarn("❌ SENDKEYS failed: " + by + " | " + exBrief(e));
 
             String healId = "H" + System.currentTimeMillis();
-            logger.info("HEAL[{}]: Invoking healer — originalLocator={} apiUrl={}", healId, by, healingConfig.apiUrl);
+            uiWarn("🩹 HEAL(sendKeys)[" + healId + "] start | original=" + by + " | apiUrl=" + healingConfig.apiUrl);
 
             long t0 = System.currentTimeMillis();
             HealResult result = healingEngine.heal(by);
             long ms = System.currentTimeMillis() - t0;
 
-            logger.info("HEAL[{}]: Returned in {} ms. resultNull={}", healId, ms, (result == null));
+            uiInfo("🕒 HEAL(sendKeys)[" + healId + "] returned in " + ms + "ms | resultNull=" + (result == null));
 
             if (result == null) {
-                logger.error("HEAL: Healing not possible (null result). original={}", by, e);
+                uiError("🛑 HEAL(sendKeys)[" + healId + "] null result | original=" + by, e);
                 throw new RuntimeException("sendKeys failed and healing not possible for locator: " + by, e);
             }
 
-            logger.info("HEALER RESPONSE: original={} healed={} confidence={} decision={}", by, result.healedXpath, result.confidence, result.decision);
+            uiInfo("🧠 HEAL(sendKeys)[" + healId + "] response | original=" + by
+                    + " | healedXpath=" + result.healedXpath
+                    + " | confidence=" + result.confidence
+                    + " | decision=" + result.decision);
 
             if (shouldAutoHeal(result)) {
-                logger.info("HEAL: Accepted healed locator (threshold={}): original={} healed={} confidence={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence);
+                uiInfo("✅ HEAL(sendKeys)[" + healId + "] accepted | threshold=" + healingConfig.confidenceThreshold
+                        + " | healed=" + result.healedLocator
+                        + " | confidence=" + result.confidence);
+
                 try {
                     WebElement healedEl = wait.until(ExpectedConditions.visibilityOfElementLocated(result.healedLocator));
                     healedEl.clear();
                     healedEl.sendKeys(data);
-                    logger.warn("HEAL: sendKeys success on healed locator. Old={} | Healed={}", by, result.healedLocator);
+                    uiInfo("✅ HEAL(sendKeys)[" + healId + "] retry success | healed=" + result.healedLocator);
+
                 } catch (Exception healEx) {
-                    logger.error("HEAL: sendKeys on healed FAILED. Old={} | Healed={}", by, result.healedLocator, healEx);
+                    uiError("🛑 HEAL(sendKeys)[" + healId + "] retry failed | original=" + by
+                            + " | healed=" + result.healedLocator
+                            + " | " + exBrief(healEx), healEx);
                     throw new RuntimeException("Healed sendKeys failed. Old=" + by + " Healed=" + result.healedLocator, healEx);
                 }
 
             } else {
-                logger.error("HEAL: Rejected healed locator (threshold={}): original={} healed={} confidence={} decision={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence, result.decision);
+                uiWarn("⛔ HEAL(sendKeys)[" + healId + "] rejected | threshold=" + healingConfig.confidenceThreshold
+                        + " | healedXpath=" + result.healedXpath
+                        + " | confidence=" + result.confidence
+                        + " | decision=" + result.decision);
                 throw new RuntimeException("Healed locator rejected (low confidence). Old=" + by + " healed=" + result.healedXpath);
             }
 
         } catch (Exception e) {
-            logger.error("SENDKEYS: Unexpected error while sending keys. Locator={} data={}", by, data, e);
+            uiError("🛑 SENDKEYS unexpected error: " + by + " | " + exBrief(e), e);
             throw new RuntimeException("Unexpected sendKeys failure for locator: " + by, e);
         }
 
@@ -158,41 +217,56 @@ public class UIActionBase {
     // ----------------------
     public UIActionBase clear(By by) {
         try {
+            uiInfo("➡️ CLEAR: " + by);
+
             WebElement element = wait.until(ExpectedConditions.visibilityOfElementLocated(by));
             element.clear();
-            logger.info("Cleared element: {}", by);
+
+            uiInfo("✅ CLEAR success: " + by);
 
         } catch (TimeoutException | NoSuchElementException e) {
-            logger.warn("CLEAR: Failed locator={} | exception={}", by, e.getClass().getSimpleName(), e);
+            uiWarn("❌ CLEAR failed: " + by + " | " + exBrief(e));
 
-            logger.warn("HEAL: Invoking healer — originalLocator={}", by);
+            uiWarn("🩹 HEAL(clear) start | original=" + by);
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {
-                logger.error("HEAL: Healing not possible (null result). original={}", by, e);
+                uiError("🛑 HEAL(clear) null result | original=" + by, e);
                 throw new RuntimeException("clear failed and healing not possible for locator: " + by, e);
             }
 
-            logger.info("HEALER RESPONSE: original={} healed={} confidence={} decision={}", by, result.healedXpath, result.confidence, result.decision);
+            uiInfo("🧠 HEAL(clear) response | original=" + by
+                    + " | healedXpath=" + result.healedXpath
+                    + " | confidence=" + result.confidence
+                    + " | decision=" + result.decision);
 
             if (shouldAutoHeal(result)) {
-                logger.info("HEAL: Accepted healed locator (threshold={}): original={} healed={} confidence={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence);
+                uiInfo("✅ HEAL(clear) accepted | threshold=" + healingConfig.confidenceThreshold
+                        + " | healed=" + result.healedLocator
+                        + " | confidence=" + result.confidence);
+
                 try {
                     WebElement healedEl = wait.until(ExpectedConditions.visibilityOfElementLocated(result.healedLocator));
                     healedEl.clear();
-                    logger.warn("HEAL: Cleared healed element. Old={} | Healed={}", by, result.healedLocator);
+                    uiInfo("✅ HEAL(clear) retry success | healed=" + result.healedLocator);
+
                 } catch (Exception healEx) {
-                    logger.error("HEAL: clear on healed FAILED. Old={} | Healed={}", by, result.healedLocator, healEx);
+                    uiError("🛑 HEAL(clear) retry failed | original=" + by
+                            + " | healed=" + result.healedLocator
+                            + " | " + exBrief(healEx), healEx);
                     throw new RuntimeException("Healed clear failed. Old=" + by + " Healed=" + result.healedLocator, healEx);
                 }
 
             } else {
-                logger.error("HEAL: Rejected healed locator (threshold={}): original={} healed={} confidence={} decision={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence, result.decision);
+                uiWarn("⛔ HEAL(clear) rejected | threshold=" + healingConfig.confidenceThreshold
+                        + " | healedXpath=" + result.healedXpath
+                        + " | confidence=" + result.confidence
+                        + " | decision=" + result.decision);
                 throw new RuntimeException("Healed locator rejected (low confidence). Old=" + by + " healed=" + result.healedXpath);
             }
 
         } catch (Exception e) {
-            logger.error("CLEAR: Unexpected error while clearing element: {}", by, e);
+            uiError("🛑 CLEAR unexpected error: " + by + " | " + exBrief(e), e);
             throw new RuntimeException("Unexpected clear failure for locator: " + by, e);
         }
 
@@ -204,41 +278,56 @@ public class UIActionBase {
     // ----------------------
     public UIActionBase hover(By by) {
         try {
+            uiInfo("➡️ HOVER: " + by);
+
             WebElement element = wait.until(ExpectedConditions.visibilityOfElementLocated(by));
             actions.moveToElement(element).perform();
-            logger.info("Hovered on element: {}", by);
+
+            uiInfo("✅ HOVER success: " + by);
 
         } catch (TimeoutException | NoSuchElementException e) {
-            logger.warn("HOVER: Failed locator={} | exception={}", by, e.getClass().getSimpleName(), e);
+            uiWarn("❌ HOVER failed: " + by + " | " + exBrief(e));
 
-            logger.warn("HEAL: Invoking healer — originalLocator={}", by);
+            uiWarn("🩹 HEAL(hover) start | original=" + by);
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {
-                logger.error("HEAL: Healing not possible (null result). original={}", by, e);
+                uiError("🛑 HEAL(hover) null result | original=" + by, e);
                 throw new RuntimeException("hover failed and healing not possible for locator: " + by, e);
             }
 
-            logger.info("HEALER RESPONSE: original={} healed={} confidence={} decision={}", by, result.healedXpath, result.confidence, result.decision);
+            uiInfo("🧠 HEAL(hover) response | original=" + by
+                    + " | healedXpath=" + result.healedXpath
+                    + " | confidence=" + result.confidence
+                    + " | decision=" + result.decision);
 
             if (shouldAutoHeal(result)) {
-                logger.info("HEAL: Accepted healed locator (threshold={}): original={} healed={} confidence={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence);
+                uiInfo("✅ HEAL(hover) accepted | threshold=" + healingConfig.confidenceThreshold
+                        + " | healed=" + result.healedLocator
+                        + " | confidence=" + result.confidence);
+
                 try {
                     WebElement healedEl = wait.until(ExpectedConditions.visibilityOfElementLocated(result.healedLocator));
                     actions.moveToElement(healedEl).perform();
-                    logger.warn("HEAL: Hovered healed element. Old={} | Healed={}", by, result.healedLocator);
+                    uiInfo("✅ HEAL(hover) retry success | healed=" + result.healedLocator);
+
                 } catch (Exception healEx) {
-                    logger.error("HEAL: hover on healed FAILED. Old={} | Healed={}", by, result.healedLocator, healEx);
+                    uiError("🛑 HEAL(hover) retry failed | original=" + by
+                            + " | healed=" + result.healedLocator
+                            + " | " + exBrief(healEx), healEx);
                     throw new RuntimeException("Healed hover failed. Old=" + by + " Healed=" + result.healedLocator, healEx);
                 }
 
             } else {
-                logger.error("HEAL: Rejected healed locator (threshold={}): original={} healed={} confidence={} decision={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence, result.decision);
+                uiWarn("⛔ HEAL(hover) rejected | threshold=" + healingConfig.confidenceThreshold
+                        + " | healedXpath=" + result.healedXpath
+                        + " | confidence=" + result.confidence
+                        + " | decision=" + result.decision);
                 throw new RuntimeException("Healed locator rejected (low confidence). Old=" + by + " healed=" + result.healedXpath);
             }
 
         } catch (Exception e) {
-            logger.error("HOVER: Unexpected error while hovering element: {}", by, e);
+            uiError("🛑 HOVER unexpected error: " + by + " | " + exBrief(e), e);
             throw new RuntimeException("Unexpected hover failure for locator: " + by, e);
         }
 
@@ -250,43 +339,58 @@ public class UIActionBase {
     // ----------------------
     public String getText(By by) {
         try {
+            uiInfo("➡️ GETTEXT: " + by);
+
             WebElement element = wait.until(ExpectedConditions.visibilityOfElementLocated(by));
             String txt = element.getText();
-            logger.info("Got text from element: {} text={}", by, txt);
+
+            uiInfo("✅ GETTEXT success: " + by + " | text=" + txt);
             return txt;
 
         } catch (TimeoutException | NoSuchElementException e) {
-            logger.warn("GETTEXT: Failed locator={} | exception={}", by, e.getClass().getSimpleName(), e);
+            uiWarn("❌ GETTEXT failed: " + by + " | " + exBrief(e));
 
-            logger.warn("HEAL: Invoking healer — originalLocator={}", by);
+            uiWarn("🩹 HEAL(getText) start | original=" + by);
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {
-                logger.error("HEAL: Healing not possible (null result). original={}", by, e);
+                uiError("🛑 HEAL(getText) null result | original=" + by, e);
                 throw new RuntimeException("getText failed and healing not possible for locator: " + by, e);
             }
 
-            logger.info("HEALER RESPONSE: original={} healed={} confidence={} decision={}", by, result.healedXpath, result.confidence, result.decision);
+            uiInfo("🧠 HEAL(getText) response | original=" + by
+                    + " | healedXpath=" + result.healedXpath
+                    + " | confidence=" + result.confidence
+                    + " | decision=" + result.decision);
 
             if (shouldAutoHeal(result)) {
-                logger.info("HEAL: Accepted healed locator (threshold={}): original={} healed={} confidence={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence);
+                uiInfo("✅ HEAL(getText) accepted | threshold=" + healingConfig.confidenceThreshold
+                        + " | healed=" + result.healedLocator
+                        + " | confidence=" + result.confidence);
+
                 try {
                     WebElement healedEl = wait.until(ExpectedConditions.visibilityOfElementLocated(result.healedLocator));
                     String txt = healedEl.getText();
-                    logger.warn("HEAL: Got text from healed element. Old={} | Healed={} text={}", by, result.healedLocator, txt);
+                    uiInfo("✅ HEAL(getText) retry success | healed=" + result.healedLocator + " | text=" + txt);
                     return txt;
+
                 } catch (Exception healEx) {
-                    logger.error("HEAL: getText on healed FAILED. Old={} | Healed={}", by, result.healedLocator, healEx);
+                    uiError("🛑 HEAL(getText) retry failed | original=" + by
+                            + " | healed=" + result.healedLocator
+                            + " | " + exBrief(healEx), healEx);
                     throw new RuntimeException("Healed getText failed. Old=" + by + " Healed=" + result.healedLocator, healEx);
                 }
 
             } else {
-                logger.error("HEAL: Rejected healed locator (threshold={}): original={} healed={} confidence={} decision={}", healingConfig.confidenceThreshold, by, result.healedXpath, result.confidence, result.decision);
+                uiWarn("⛔ HEAL(getText) rejected | threshold=" + healingConfig.confidenceThreshold
+                        + " | healedXpath=" + result.healedXpath
+                        + " | confidence=" + result.confidence
+                        + " | decision=" + result.decision);
                 throw new RuntimeException("Healed locator rejected (low confidence). Old=" + by + " healed=" + result.healedXpath);
             }
 
         } catch (Exception e) {
-            logger.error("GETTEXT: Unexpected error while getting text: {}", by, e);
+            uiError("🛑 GETTEXT unexpected error: " + by + " | " + exBrief(e), e);
             throw new RuntimeException("Unexpected getText failure for locator: " + by, e);
         }
     }
@@ -298,13 +402,13 @@ public class UIActionBase {
 
             if (!els.isEmpty()) {
                 js.executeScript("arguments[0].scrollIntoView({block:'center', inline:'nearest'});", els.get(0));
-                logger.info("Scrolled to element: {}", by);
+                uiInfo("🧭 SCROLL: element found, scrolled to " + by);
             } else {
                 js.executeScript("window.scrollTo(0, (document.documentElement.scrollHeight || document.body.scrollHeight));");
-                logger.info("Scrolled to page end (element not found): {}", by);
+                uiInfo("🧭 SCROLL: element not found, scrolled to page end | locator=" + by);
             }
         } catch (Exception e) {
-            logger.error("Failed to scroll to element: {}", by, e);
+            uiError("🛑 SCROLL failed | locator=" + by + " | " + exBrief(e), e);
         }
         return this;
     }
@@ -314,5 +418,4 @@ public class UIActionBase {
                 && r.decision != null
                 && r.decision.startsWith("AUTO_HEAL");
     }
-
 }
