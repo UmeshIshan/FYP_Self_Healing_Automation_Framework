@@ -49,6 +49,70 @@ public class CandidateExtractor {
                         "  } catch(ex) { return ''; }\n" +
                         "}\n" +
 
+                        // ---------- HEADING CONTEXT ----------
+                        "function headingContext(e){\n" +
+                        "  try {\n" +
+                        "    var cur = e.parentElement;\n" +
+                        "    var depth = 0;\n" +
+                        "    while(cur && depth < 6){\n" +
+                        "      var t = (cur.tagName||'').toLowerCase();\n" +
+                        "      if(t==='h1'||t==='h2'||t==='h3'||t==='h4'||t==='h5'||t==='h6') return safeStr(cur.innerText);\n" +
+                        "      var kids = cur.querySelectorAll ? Array.from(cur.querySelectorAll('h1,h2,h3,h4,h5,h6')) : [];\n" +
+                        "      if(kids.length > 0) return safeStr(kids[0].innerText);\n" +
+                        "      cur = cur.parentElement; depth++;\n" +
+                        "    }\n" +
+                        "    return '';\n" +
+                        "  } catch(ex){ return ''; }\n" +
+                        "}\n" +
+
+                        // ---------- ANCESTOR CHAIN ----------
+                        "function ancestorChain(e){\n" +
+                        "  try {\n" +
+                        "    var parts = []; var cur = e.parentElement; var d = 0;\n" +
+                        "    while(cur && d < 5){\n" +
+                        "      var t = (cur.tagName||'').toLowerCase();\n" +
+                        "      var cls = safeStr(cur.className).split(' ')[0];\n" +
+                        "      parts.push(cls ? t+'.'+cls : t);\n" +
+                        "      cur = cur.parentElement; d++;\n" +
+                        "    }\n" +
+                        "    return parts.join(' > ');\n" +
+                        "  } catch(ex){ return ''; }\n" +
+                        "}\n" +
+
+                        // ---------- DOM DEPTH ----------
+                        "function domDepth(e){\n" +
+                        "  try {\n" +
+                        "    var d = 0; var cur = e.parentElement;\n" +
+                        "    while(cur && cur.nodeType===1){ d++; cur = cur.parentElement; }\n" +
+                        "    return d;\n" +
+                        "  } catch(ex){ return 0; }\n" +
+                        "}\n" +
+
+                        // ---------- SIBLING TEXTS ----------
+                        "function siblingText(e, direction){\n" +
+                        "  try {\n" +
+                        "    var texts = []; var sib = direction==='before' ? e.previousElementSibling : e.nextElementSibling;\n" +
+                        "    var limit = 2;\n" +
+                        "    while(sib && limit-->0){\n" +
+                        "      var t = safeStr(sib.innerText||sib.textContent||'');\n" +
+                        "      if(t) texts.push(t);\n" +
+                        "      sib = direction==='before' ? sib.previousElementSibling : sib.nextElementSibling;\n" +
+                        "    }\n" +
+                        "    return texts.join(' | ');\n" +
+                        "  } catch(ex){ return ''; }\n" +
+                        "}\n" +
+
+                        // ---------- NEARBY TEXT ----------
+                        "function nearbyText(e){\n" +
+                        "  try {\n" +
+                        "    var p = e.parentElement;\n" +
+                        "    if(!p) return '';\n" +
+                        "    var t = safeStr(p.innerText||p.textContent||'');\n" +
+                        "    if(t.length > 120) t = t.substring(0,120);\n" +
+                        "    return t;\n" +
+                        "  } catch(ex){ return ''; }\n" +
+                        "}\n" +
+
                         // ---------- XPATH HELPERS ----------
                         "function xpathLiteral(s){\n" +
                         "  s = safeStr(s);\n" +
@@ -87,9 +151,9 @@ public class CandidateExtractor {
                         "const cap = arguments[1] || 200;\n" +
                         "const els = Array.from(document.querySelectorAll(sel)).filter(isVisible).slice(0, cap);\n" +
                         "return els.map((e,i)=>({\n" +
-                        "  xpath: stableXPath(e),\n" +
+                        "  xpath:          stableXPath(e),\n" +
 
-                        // 👇 IMPORTANT: enriched text blob (synonym-resistant, safe)
+                        // enriched text blob (synonym-resistant, safe)
                         "  text: (\n" +
                         "    safeStr(e.innerText || e.value || '') + ' ' +\n" +
                         "    labelText(e) + ' ' +\n" +
@@ -100,16 +164,35 @@ public class CandidateExtractor {
                         "    (attr(e,'data-testid')||attr(e,'data-test')||attr(e,'data-qa'))\n" +
                         "  ).trim(),\n" +
 
-                        "  tag: (e.tagName||'').toLowerCase(),\n" +
-                        "  idx: i,\n" +
-                        "  id: safeStr(e.id),\n" +
-                        "  name: attr(e,'name'),\n" +
-                        "  className: safeStr(e.className),\n" +
-                        "  placeholder: attr(e,'placeholder'),\n" +
-                        "  ariaLabel: attr(e,'aria-label'),\n" +
-                        "  type: attr(e,'type'),\n" +
-                        "  value: safeStr(e.value),\n" +
-                        "  dataTestId: (attr(e,'data-testid')||attr(e,'data-test')||attr(e,'data-qa'))\n" +
+                        // existing fields
+                        "  tag:            (e.tagName||'').toLowerCase(),\n" +
+                        "  idx:            i,\n" +
+                        "  id:             safeStr(e.id),\n" +
+                        "  name:           attr(e,'name'),\n" +
+                        "  className:      safeStr(e.className),\n" +
+                        "  placeholder:    attr(e,'placeholder'),\n" +
+                        "  ariaLabel:      attr(e,'aria-label'),\n" +
+                        "  type:           attr(e,'type'),\n" +
+                        "  value:          safeStr(e.value),\n" +
+                        "  dataTestId:     (attr(e,'data-testid')||attr(e,'data-test')||attr(e,'data-qa')),\n" +
+
+                        // NEW: richer context fields
+                        "  role:           attr(e,'role'),\n" +
+                        "  title:          attr(e,'title'),\n" +
+                        "  labelText:      labelText(e),\n" +
+                        "  parentText:     safeStr(e.parentElement ? (e.parentElement.innerText||'') : '').substring(0,200),\n" +
+                        "  headingContext: headingContext(e),\n" +
+                        "  ancestorChain:  ancestorChain(e),\n" +
+                        "  domDepth:       domDepth(e),\n" +
+                        "  siblingBefore:  siblingText(e,'before'),\n" +
+                        "  siblingAfter:   siblingText(e,'after'),\n" +
+                        "  nearbyText:     nearbyText(e),\n" +
+                        "  isVisible:      isVisible(e),\n" +
+                        "  isEnabled:      !e.disabled,\n" +
+                        "  bboxX:          (e.getBoundingClientRect()||{}).left||0,\n" +
+                        "  bboxY:          (e.getBoundingClientRect()||{}).top||0,\n" +
+                        "  bboxW:          (e.getBoundingClientRect()||{}).width||0,\n" +
+                        "  bboxH:          (e.getBoundingClientRect()||{}).height||0\n" +
                         "}));";
 
 
@@ -119,29 +202,54 @@ public class CandidateExtractor {
 
         List<HealDTO.Candidate> out = new ArrayList<>();
         for (Map<String, Object> r : raw) {
-            String xpath = (String) r.get("xpath");
-            String text = (String) r.get("text");
-            String tag = (String) r.get("tag");
-            int idx = ((Number) r.get("idx")).intValue();
-            String aria = (String) r.get("ariaLabel");
+            String xpath       = (String) r.get("xpath");
+            String text        = (String) r.get("text");
+            String tag         = (String) r.get("tag");
+            int    idx         = ((Number) r.get("idx")).intValue();
+            String aria        = safeStr(r.get("ariaLabel"));
 
-            // new fields
-            String id = (String) r.get("id");
-            String name = (String) r.get("name");
-            String className = (String) r.get("className");
-            String placeholder = (String) r.get("placeholder");
-            String type = (String) r.get("type");
-            String dataTestId = (String) r.get("dataTestId");
-            String value = (String) r.get("value");
+            // existing attribute fields
+            String id          = safeStr(r.get("id"));
+            String name        = safeStr(r.get("name"));
+            String className   = safeStr(r.get("className"));
+            String placeholder = safeStr(r.get("placeholder"));
+            String type        = safeStr(r.get("type"));
+            String dataTestId  = safeStr(r.get("dataTestId"));
+            String value       = safeStr(r.get("value"));
+
+            // NEW: richer context fields
+            String role          = safeStr(r.get("role"));
+            String title         = safeStr(r.get("title"));
+            String labelTxt      = safeStr(r.get("labelText"));
+            String parentText    = safeStr(r.get("parentText"));
+            String headingCtx    = safeStr(r.get("headingContext"));
+            String ancestorCh    = safeStr(r.get("ancestorChain"));
+            double domDepthVal   = r.get("domDepth") != null ? ((Number) r.get("domDepth")).doubleValue() : 0.0;
+            String sibBefore     = safeStr(r.get("siblingBefore"));
+            String sibAfter      = safeStr(r.get("siblingAfter"));
+            String nearby        = safeStr(r.get("nearbyText"));
+            boolean visibleVal   = r.get("isVisible") != null && Boolean.TRUE.equals(r.get("isVisible"));
+            boolean enabledVal   = r.get("isEnabled") == null || Boolean.TRUE.equals(r.get("isEnabled"));
+            double bboxX         = r.get("bboxX") != null ? ((Number) r.get("bboxX")).doubleValue() : 0.0;
+            double bboxY         = r.get("bboxY") != null ? ((Number) r.get("bboxY")).doubleValue() : 0.0;
+            double bboxW         = r.get("bboxW") != null ? ((Number) r.get("bboxW")).doubleValue() : 0.0;
+            double bboxH         = r.get("bboxH") != null ? ((Number) r.get("bboxH")).doubleValue() : 0.0;
 
             if (xpath != null && !xpath.isBlank()) {
-                // ✅ Use the NEW overloaded constructor (keep your old constructor too)
                 out.add(new HealDTO.Candidate(
                         xpath, text, tag, idx, aria,
-                        id, name, className, placeholder, type, value, dataTestId
+                        id, name, className, placeholder, type, value, dataTestId,
+                        role, title, labelTxt, parentText, headingCtx, ancestorCh,
+                        domDepthVal, sibBefore, sibAfter, nearby,
+                        visibleVal, enabledVal,
+                        bboxX, bboxY, bboxW, bboxH
                 ));
             }
         }
         return out;
+    }
+
+    private static String safeStr(Object o) {
+        return o == null ? "" : o.toString().trim();
     }
 }

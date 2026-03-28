@@ -52,6 +52,26 @@ public class SelfHealingEngine {
             old.text = "";
         }
 
+        // FIX: populate OldElement attribute fields from XPath predicates.
+        // Without this, id_match, aria_match, type_match, label_seqsim etc are always 0
+        // because the API compares old.id vs candidate.id — and old.id was always empty.
+        enrichOldElementFromXpath(old, oldXpath);
+
+        // Infer old.type from action context — DOM constraint, not token assumption.
+        // click + <input> can only ever have targeted type=submit or type=button.
+        // Without this, type_match=0 for all candidates and idx_distance dominates,
+        // causing the model to pick user-name (idx=0) over login-button (idx=2).
+        if (old.type == null || old.type.isBlank()) {
+            String action = safe(config.actionName).toLowerCase();
+            String tag    = safe(old.tag).toLowerCase();
+            if ((action.contains("click") || action.contains("tap")) && tag.equals("input")) {
+                old.type = "submit";
+            } else if ((action.contains("sendkeys") || action.contains("type")) && tag.equals("input")) {
+                String ph = safe(old.placeholder).toLowerCase();
+                old.type = (ph.contains("pass") || ph.contains("pwd")) ? "password" : "text";
+            }
+        }
+
         HealDTO.HealRequest req = new HealDTO.HealRequest(old, candidates);
 
         long start = System.currentTimeMillis();
@@ -122,10 +142,7 @@ public class SelfHealingEngine {
             // STEP 1: ML heal (existing)
             String expectedTag = inferTagFromXpath(oldXpath);
 
-            // If action is SEND_KEYS, expectedTag should not restrict to wrong tags like span/div
-            if (safe(config.actionName).toLowerCase().contains("sendkeys") || safe(config.actionName).toLowerCase().contains("type")) {
-                expectedTag = "input";
-            }
+            // Action-agnostic: do not restrict tag based on action type
 
             String expectedText = normalizeHint(extractBestHintFromXpath(oldXpath));
 
@@ -140,8 +157,8 @@ public class SelfHealingEngine {
             String selector = actionSelector(config.actionName, expectedTag);
             List<HealDTO.Candidate> candidates = extractor.extract(config.maxCandidates, selector);
 
-            HealResult attrFb = attributeFallback(oldXpath, candidates);
-            if (attrFb != null) return attrFb;
+            // FIX 2: attributeFallback moved AFTER ML — no longer bypasses the model
+            // (removed from here, called after ML result below)
 
             // 🔍 DEBUG: Print candidates sent to the API (ranker input)
             if (candidates != null) {
@@ -174,6 +191,17 @@ public class SelfHealingEngine {
 
             if (result == null) return null;
 
+            // FIX 2: attributeFallback now runs AFTER ML as a confirming step only.
+            // If it agrees with ML, boost confidence. If it disagrees, trust ML.
+            HealResult attrFb = attributeFallback(oldXpath, candidates);
+            if (attrFb != null) {
+                if (attrFb.healedXpath != null && attrFb.healedXpath.equals(result.healedXpath)) {
+                    // ML and attribute heuristic agree — boost confidence
+                    result.confidence = Math.max(result.confidence, 0.95);
+                    result.decision = "AUTO_HEAL_ATTR_CONFIRMED";
+                }
+                // if they disagree, trust ML — do nothing
+            }
 
             if (config.enableIntentGate) {
                 String oldTok = normalizeIntent(extractIntentToken(oldXpath));
@@ -236,8 +264,10 @@ public class SelfHealingEngine {
                 }
             }
 
-
-            boolean apiAuto = result.decision != null && result.decision.equalsIgnoreCase("auto_heal");
+            boolean apiAuto = result.decision != null && (
+                    result.decision.equalsIgnoreCase("auto_heal") ||
+                            result.decision.equalsIgnoreCase("AUTO_HEAL_ATTR_CONFIRMED")
+            );
 
             // If API said manual_review, do NOT force auto-heal here.
             // Only auto-heal if API is auto_heal and confidence passes threshold.
@@ -256,7 +286,7 @@ public class SelfHealingEngine {
                     originalLocator, oldXpathSafe, config.apiUrl, config.actionName, e.toString(), e);
 
             HealResult r = new HealResult(null, null, 0.0d, "MANUAL_REVIEW_API_ERROR");
-            r.reason = e.getMessage(); // ✅ this will surface the root cause to UIActionBase if you log it
+            r.reason = e.getMessage();
             return r;
         }
     }
@@ -287,7 +317,7 @@ public class SelfHealingEngine {
         }
     }
 
-    /** Very small DOM fallback: tries to recover common “Username/Widgets” style intent. */
+    /** Very small DOM fallback: tries to recover common "Username/Widgets" style intent. */
     private HealResult domFallback(String oldXpath) {
         if (oldXpath == null || oldXpath.isBlank()) return null;
 
@@ -388,7 +418,7 @@ public class SelfHealingEngine {
 
     private boolean intentMatches(String oldXpath, String healedXpath) {
         String oldTok = normalizeIntent(extractIntentToken(oldXpath));
-        if (oldTok.isBlank()) return true; // no intent extracted -> don’t block
+        if (oldTok.isBlank()) return true; // no intent extracted -> don't block
 
         // if healed xpath contains any synonym/canonical form, allow
         String hx = (healedXpath == null) ? "" : healedXpath.toLowerCase();
@@ -442,29 +472,8 @@ public class SelfHealingEngine {
     }
 
     private boolean isAllowedForAction(String action, WebElement e) {
-        String tag = safe(e.getTagName()).toLowerCase();
-        String role = safe(e.getAttribute("role")).toLowerCase();
-        String ce = safe(e.getAttribute("contenteditable")).toLowerCase();
-        String type = safe(e.getAttribute("type")).toLowerCase();
-
-        action = (action == null ? "" : action.toLowerCase());
-
-        if (action.contains("sendkeys") || action.contains("type")) {
-            if (tag.equals("input") || tag.equals("textarea")) return true;
-            if (role.equals("textbox")) return true;
-            if (ce.equals("true")) return true;
-            return false;
-        }
-
-        if (action.contains("click") || action.contains("tap")) {
-            if (tag.equals("button") || tag.equals("a")) return true;
-            if (role.equals("button")) return true;
-            // Optional: allow input[type=submit/button]
-            if (tag.equals("input") && (type.equals("submit") || type.equals("button"))) return true;
-            return false;
-        }
-
-        // Default: be strict
+        // Action-agnostic: any visible element is allowed.
+        // Candidate quality is determined by the ML model, not by tag filtering.
         return true;
     }
 
@@ -485,7 +494,7 @@ public class SelfHealingEngine {
         for (String t : n) if (h.contains(t)) hit++;
 
         double overlap = (double) hit / (double) n.size();
-        return overlap >= 0.6; // tune 0.5–0.7
+        return overlap >= 0.6; // tune 0.5-0.7
     }
 
     private String normalizeTokens(String s) {
@@ -504,13 +513,16 @@ public class SelfHealingEngine {
         }
 
         if (a.contains("click") || a.contains("tap")) {
-            return "button,a[href],[role=\"button\"],input[type=\"submit\"],input[type=\"button\"]";
+            return "button,a,input[type=\"submit\"],input[type=\"button\"]," +
+                    "[role=\"button\"],[role=\"link\"],[role=\"menuitem\"]," +
+                    "[role=\"tab\"],[role=\"checkbox\"],[role=\"radio\"],[aria-label]";
         }
 
-        // fallback
-        return safe(expectedTag).isBlank()
-                ? "input,textarea,button,a[href],[role],[aria-label],[data-testid],[data-test],[data-qa]"
-                : safe(expectedTag);
+        if (a.contains("hover")) {
+            return "button,a,img,[role],[data-test],[data-testid],[aria-label]";
+        }
+
+        return "input,textarea,button,a,[role],[aria-label]";
     }
 
 
@@ -571,7 +583,7 @@ public class SelfHealingEngine {
         if (oldXpath == null || candidates == null || candidates.isEmpty()) return null;
 
         java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("(?:contains\\(\\s*@((?:data-testid|data-test|data-qa|id|name|placeholder))\\s*,\\s*['\\\"]([^'\\\"]+)['\\\"]\\s*\\)|@((?:data-testid|data-test|data-qa|id|name|placeholder))\\s*=\\s*['\\\"]([^'\\\"]+)['\\\"])")
+                .compile("(?:contains\\(\\s*@((?:data-testid|data-test|data-qa|id|name|placeholder))\\s*,\\s*['\"]([^'\"]+)['\"]\\s*\\)|@((?:data-testid|data-test|data-qa|id|name|placeholder))\\s*=\\s*['\"]([^'\"]+)['\"])")
                 .matcher(oldXpath);
 
         if (!m.find()) return null;
@@ -582,23 +594,33 @@ public class SelfHealingEngine {
         if (attr == null || val == null) return null;
 
         attr = attr.trim().toLowerCase();
-        val = val.trim().toLowerCase();
+        val  = val.trim().toLowerCase();
         if (val.isEmpty()) return null;
+
+        // FIX 1: normalise val — replace hyphens/underscores with spaces so
+        // "add-to-cart backpack" matches "add-to-cart-sauce-labs-backpack"
+        String valN = val.replaceAll("[\\-_]", " ").replaceAll("\\s+", " ").trim();
 
         HealDTO.Candidate best = null;
 
         for (HealDTO.Candidate c : candidates) {
             String cand = "";
 
-            if ("id".equals(attr)) cand = safe(c.id);
-            else if ("name".equals(attr)) cand = safe(c.name);
-            else if ("placeholder".equals(attr)) cand = safe(c.placeholder);
-            else if ("data-testid".equals(attr) || "data-test".equals(attr) || "data-qa".equals(attr)) cand = safe(c.dataTestId);
+            if ("id".equals(attr))                                                    cand = safe(c.id);
+            else if ("name".equals(attr))                                             cand = safe(c.name);
+            else if ("placeholder".equals(attr))                                      cand = safe(c.placeholder);
+            else if ("data-testid".equals(attr) || "data-test".equals(attr)
+                    || "data-qa".equals(attr))                                          cand = safe(c.dataTestId);
 
-            cand = cand.toLowerCase();
+            // FIX 1: normalise cand the same way
+            String candN = cand.toLowerCase().replaceAll("[\\-_]", " ").replaceAll("\\s+", " ").trim();
 
-            if (cand.equals(val)) { best = c; break; }
-            if (best == null && (cand.contains(val) || val.contains(cand))) best = c;
+            // exact match after normalisation — highest priority
+            if (candN.equals(valN)) { best = c; break; }
+
+            // FIX 1: removed the loose val.contains(cand) partial match that caused
+            // react-burger-menu-btn to be picked. Only allow cand starts-with val
+            if (best == null && containsAllTokens(candN, valN)) best = c;
         }
 
         if (best == null || best.xpath == null || best.xpath.trim().isEmpty()) return null;
@@ -609,14 +631,46 @@ public class SelfHealingEngine {
         }
         return null;
     }
+    /**
+     * Extracts attribute values from XPath predicates and populates OldElement fields.
+     * e.g. //input[@placeholder='Username'] -> old.placeholder = "Username"
+     *      //button[contains(@data-test,'add-to-cart')] -> old.dataTestId = "add-to-cart"
+     */
+    private void enrichOldElementFromXpath(HealDTO.OldElement old, String xpath) {
+        if (xpath == null || xpath.isBlank()) return;
+        try {
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                    "@(data-testid|data-test|data-qa|id|name|placeholder|aria-label|type|role|title|value)" +
+                            "\\s*[=,]\\s*['\"]([^'\"]{1,120})['\"]",
+                    java.util.regex.Pattern.CASE_INSENSITIVE
+            );
+            java.util.regex.Matcher m = p.matcher(xpath);
+            while (m.find()) {
+                String attr = m.group(1).trim().toLowerCase();
+                String val  = m.group(2).trim();
+                switch (attr) {
+                    case "id"                          -> old.id          = val;
+                    case "name"                        -> old.name        = val;
+                    case "placeholder"                 -> old.placeholder = val;
+                    case "aria-label"                  -> old.ariaLabel   = val;
+                    case "type"                        -> old.type        = val;
+                    case "role"                        -> old.role        = val;
+                    case "title"                       -> old.title       = val;
+                    case "value"                       -> old.value       = val;
+                    case "data-testid", "data-test",
+                         "data-qa"                    -> old.dataTestId  = val;
+                }
+            }
+        } catch (Exception ignored) {}
+    }
 
-
-
-
-
-
-
-
-
+    private boolean containsAllTokens(String candN, String valN) {
+        if (valN == null || valN.isBlank()) return false;
+        String[] tokens = valN.trim().split("\s+");
+        for (String token : tokens) {
+            if (token.length() >= 3 && !candN.contains(token)) return false;
+        }
+        return true;
+    }
 
 }

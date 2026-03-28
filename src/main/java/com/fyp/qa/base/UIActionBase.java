@@ -97,6 +97,7 @@ public class UIActionBase {
 
             // Try healing
             uiWarn("🩹 HEAL(click) start | original=" + by);
+            healingConfig.actionName = "click";
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {
@@ -163,6 +164,7 @@ public class UIActionBase {
             uiWarn("🩹 HEAL(sendKeys)[" + healId + "] start | original=" + by + " | apiUrl=" + healingConfig.apiUrl);
 
             long t0 = System.currentTimeMillis();
+            healingConfig.actionName = "sendKeys";
             HealResult result = healingEngine.heal(by);
             long ms = System.currentTimeMillis() - t0;
 
@@ -228,6 +230,7 @@ public class UIActionBase {
             uiWarn("❌ CLEAR failed: " + by + " | " + exBrief(e));
 
             uiWarn("🩹 HEAL(clear) start | original=" + by);
+            healingConfig.actionName = "sendKeys";
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {
@@ -289,6 +292,7 @@ public class UIActionBase {
             uiWarn("❌ HOVER failed: " + by + " | " + exBrief(e));
 
             uiWarn("🩹 HEAL(hover) start | original=" + by);
+            healingConfig.actionName = "hover";
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {
@@ -351,6 +355,7 @@ public class UIActionBase {
             uiWarn("❌ GETTEXT failed: " + by + " | " + exBrief(e));
 
             uiWarn("🩹 HEAL(getText) start | original=" + by);
+            healingConfig.actionName = "click";
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {

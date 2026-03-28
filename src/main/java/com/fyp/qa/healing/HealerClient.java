@@ -28,38 +28,77 @@ public class HealerClient {
         long start = System.currentTimeMillis();
 
         String bodyJson = mapper.writeValueAsString(req);
-        String url = apiUrl + "/heal";
+
+        // FIX: append /heal path if not already present
+        String url = apiUrl.endsWith("/heal") ? apiUrl : apiUrl.replaceAll("/+$", "") + "/heal";
 
         Request request = new Request.Builder()
                 .url(url)
                 .post(RequestBody.create(bodyJson, JSON))
                 .build();
 
-        try (Response response = client.newCall(request).execute()) {
+        // FIX: retry once on timeout or 5xx — transient API blips should not abort the heal
+        IOException lastEx = null;
+        Response response = null;
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                response = client.newCall(request).execute();
+                if (response.isSuccessful()) {
+                    lastEx = null;
+                    break;
+                }
+                // 5xx — retry once
+                int code = response.code();
+                if (code >= 500 && attempt < 2) {
+                    response.close();
+                    response = null;
+                    Thread.sleep(500);
+                    continue;
+                }
+                break; // 4xx or second 5xx — don't retry
+            } catch (java.net.SocketTimeoutException | java.net.ConnectException ex) {
+                lastEx = new IOException("Attempt " + attempt + " failed: " + ex.getMessage(), ex);
+                if (attempt < 2) {
+                    try { Thread.sleep(500); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Heal interrupted", ie);
+            }
+        }
+
+        if (lastEx != null) {
             long ms = System.currentTimeMillis() - start;
+            throw new IOException("Healer API unreachable after 2 attempts: url=" + url + " elapsedMs=" + ms, lastEx);
+        }
 
-            int code = response.code();
-            String respBody = response.body() != null ? response.body().string() : "";
+        if (response == null) {
+            throw new IOException("Healer API: no response after retries | url=" + url);
+        }
 
-            if (!response.isSuccessful()) {
-                // ✅ THIS is the missing part: FastAPI error details are in the body (422 especially)
-                throw new IOException("Healer API failed: " + code + " " + response.message() +
+        try (Response r = response) {
+            long ms = System.currentTimeMillis() - start;
+            int code = r.code();
+            String respBody = r.body() != null ? r.body().string() : "";
+
+            if (!r.isSuccessful()) {
+                throw new IOException("Healer API failed: " + code + " " + r.message() +
                         " | url=" + url +
                         " | elapsedMs=" + ms +
                         " | body=" + truncate(respBody, 800));
             }
 
-            // Optional: debug log (if you want)
-            // logger.info("Healer API OK url={} elapsedMs={} body={}", url, ms, truncate(respBody, 300));
-
-            return mapper.readValue(respBody, HealDTO.HealResponse.class);
-
-        } catch (java.net.SocketTimeoutException te) {
-            long ms = System.currentTimeMillis() - start;
-            throw new IOException("Healer API timeout: url=" + url + " elapsedMs=" + ms, te);
-        } catch (java.net.ConnectException ce) {
-            long ms = System.currentTimeMillis() - start;
-            throw new IOException("Healer API connection failed: url=" + url + " elapsedMs=" + ms, ce);
+            try {
+                HealDTO.HealResponse parsed = mapper.readValue(respBody, HealDTO.HealResponse.class);
+                System.out.println("HEAL parsed response = " + parsed);
+                return parsed;
+            } catch (Exception pe) {
+                throw new IOException("Healer API parse failed" +
+                        " | url=" + url +
+                        " | elapsedMs=" + ms +
+                        " | body=" + truncate(respBody, 800), pe);
+            }
         }
     }
 
@@ -67,5 +106,4 @@ public class HealerClient {
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "...(truncated)";
     }
-
 }
