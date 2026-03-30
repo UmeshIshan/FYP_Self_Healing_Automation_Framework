@@ -24,8 +24,7 @@ public class HealDTO {
         public String intent = "";
         public int    idx    = 0;
 
-        // FIX: add all fields the Python API expects for OldElement.
-        // Without these, ML features like id_match, aria_match, type_match,
+        // add all fields the Python API expects for OldElement.
         // role_match, label_seqsim, ancestor_jaccard are always 0.
         public String id             = "";
         public String name           = "";

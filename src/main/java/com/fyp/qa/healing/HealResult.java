@@ -2,9 +2,8 @@ package com.fyp.qa.healing;
 
 import org.openqa.selenium.By;
 
-/**
- * Simple POJO representing the healer's response mapped into a usable form.
- */
+ //Simple POJO representing the healer's response mapped into a usable form.
+
 public class HealResult {
     public By healedLocator;
     public String healedXpath;

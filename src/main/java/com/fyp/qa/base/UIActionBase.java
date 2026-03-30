@@ -79,9 +79,7 @@ public class UIActionBase {
         return this;
     }
 
-    // ----------------------
     // CLICK (with healing)
-    // ----------------------
     public UIActionBase click(By by) {
         try {
             uiInfo("➡️ CLICK: " + by);
@@ -144,9 +142,7 @@ public class UIActionBase {
         }
     }
 
-    // ----------------------
     // SEND KEYS (with healing)
-    // ----------------------
     public UIActionBase sendKeys(By by, String data) {
         try {
             uiInfo("➡️ SENDKEYS: " + by + " | dataLen=" + (data == null ? 0 : data.length()));
@@ -214,9 +210,7 @@ public class UIActionBase {
         return this;
     }
 
-    // ----------------------
     // CLEAR (with healing)
-    // ----------------------
     public UIActionBase clear(By by) {
         try {
             uiInfo("➡️ CLEAR: " + by);
@@ -276,9 +270,7 @@ public class UIActionBase {
         return this;
     }
 
-    // ----------------------
     // OPTIONAL: HOVER (with healing)
-    // ----------------------
     public UIActionBase hover(By by) {
         try {
             uiInfo("➡️ HOVER: " + by);
@@ -338,9 +330,7 @@ public class UIActionBase {
         return this;
     }
 
-    // ----------------------
     // OPTIONAL: GET TEXT (with healing)
-    // ----------------------
     public String getText(By by) {
         try {
             uiInfo("➡️ GETTEXT: " + by);
@@ -355,7 +345,7 @@ public class UIActionBase {
             uiWarn("❌ GETTEXT failed: " + by + " | " + exBrief(e));
 
             uiWarn("🩹 HEAL(getText) start | original=" + by);
-            healingConfig.actionName = "click";
+            healingConfig.actionName = "getText";
             HealResult result = healingEngine.heal(by);
 
             if (result == null) {

@@ -33,10 +33,7 @@ public class SelfHealingEngine {
         return locator.toString().replaceFirst("^By\\.xpath:\\s*", "");
     }
 
-    /**
-     * Returns HealResult (with healed xpath & confidence & decision) if healer suggests something,
-     * otherwise returns null.
-     */
+     // Returns HealResult (with healed xpath & confidence & decision) if healer suggests something,otherwise returns null.
     public HealResult healXPathResult(String oldXpath, String expectedText, String expectedTag, List<HealDTO.Candidate> candidates) throws Exception {
         String intentTok = normalizeIntent(extractIntentToken(oldXpath));
 
@@ -52,7 +49,7 @@ public class SelfHealingEngine {
             old.text = "";
         }
 
-        // FIX: populate OldElement attribute fields from XPath predicates.
+        // populate OldElement attribute fields from XPath predicates.
         // Without this, id_match, aria_match, type_match, label_seqsim etc are always 0
         // because the API compares old.id vs candidate.id — and old.id was always empty.
         enrichOldElementFromXpath(old, oldXpath);
@@ -81,7 +78,7 @@ public class SelfHealingEngine {
 
         HealDTO.HealResponse resp = client.heal(req);
 
-        // 🔍 DEBUG: API payload candidates preview
+        // DEBUG: API payload candidates preview
         if (candidates != null) {
             int limit = Math.min(candidates.size(), 15); // prevent huge logs
             logger.info("HEAL DEBUG: sending {} candidates to API (showing first {})", candidates.size(), limit);
@@ -120,10 +117,9 @@ public class SelfHealingEngine {
         return new HealResult(healedBy, resp.healed_xpath, resp.confidence, resp.decision);
     }
 
-    /**
-     * Single entry: try heal from By locator.
-     * Returns HealResult or null.
-     */
+
+     //Single entry: try heal from By locator.Returns HealResult or null.
+
     public HealResult heal(By originalLocator) {
         if (!config.enabled) return null;
         if (!isXPathLocator(originalLocator)) return null;
@@ -139,7 +135,7 @@ public class SelfHealingEngine {
                 if (fb != null) return fb;
             }
 
-            // STEP 1: ML heal (existing)
+            // ML heal
             String expectedTag = inferTagFromXpath(oldXpath);
 
             // Action-agnostic: do not restrict tag based on action type
@@ -157,10 +153,7 @@ public class SelfHealingEngine {
             String selector = actionSelector(config.actionName, expectedTag);
             List<HealDTO.Candidate> candidates = extractor.extract(config.maxCandidates, selector);
 
-            // FIX 2: attributeFallback moved AFTER ML — no longer bypasses the model
-            // (removed from here, called after ML result below)
-
-            // 🔍 DEBUG: Print candidates sent to the API (ranker input)
+            // DEBUG: Print candidates sent to the API (ranker input)
             if (candidates != null) {
                 logger.info("HEAL DEBUG: candidates dump (count={} selector='{}' expectedTag='{}' expectedText='{}')",
                         candidates.size(), selector, expectedTag, expectedText);
@@ -191,7 +184,7 @@ public class SelfHealingEngine {
 
             if (result == null) return null;
 
-            // FIX 2: attributeFallback now runs AFTER ML as a confirming step only.
+            //  attributeFallback runs AFTER ML as a confirming step only.
             // If it agrees with ML, boost confidence. If it disagrees, trust ML.
             HealResult attrFb = attributeFallback(oldXpath, candidates);
             if (attrFb != null) {
@@ -472,7 +465,6 @@ public class SelfHealingEngine {
     }
 
     private boolean isAllowedForAction(String action, WebElement e) {
-        // Action-agnostic: any visible element is allowed.
         // Candidate quality is determined by the ML model, not by tag filtering.
         return true;
     }
@@ -507,22 +499,10 @@ public class SelfHealingEngine {
 
     private String actionSelector(String actionName, String expectedTag) {
         String a = safe(actionName).toLowerCase();
-
-        if (a.contains("sendkeys") || a.contains("type")) {
-            return "input,textarea,[role=\"textbox\"],[contenteditable=\"true\"]";
+        if (a.contains("gettext") || a.contains("asserttext") || a.contains("read")) {
+            return CandidateExtractor.SELECTOR_TEXT;
         }
-
-        if (a.contains("click") || a.contains("tap")) {
-            return "button,a,input[type=\"submit\"],input[type=\"button\"]," +
-                    "[role=\"button\"],[role=\"link\"],[role=\"menuitem\"]," +
-                    "[role=\"tab\"],[role=\"checkbox\"],[role=\"radio\"],[aria-label]";
-        }
-
-        if (a.contains("hover")) {
-            return "button,a,img,[role],[data-test],[data-testid],[aria-label]";
-        }
-
-        return "input,textarea,button,a,[role],[aria-label]";
+        return CandidateExtractor.SELECTOR_INTERACTIVE;
     }
 
 
@@ -566,7 +546,7 @@ public class SelfHealingEngine {
         if (raw == null) return "";
         String s = raw.trim().toLowerCase();
 
-        // convert separators into spaces so "sign-in" becomes "sign in"
+        // convert separators into spaces
         s = s.replaceAll("[^a-z0-9]+", " ").replaceAll("\\s+", " ").trim();
 
         // canonicalize each token using the same synonym collapsing
@@ -597,7 +577,7 @@ public class SelfHealingEngine {
         val  = val.trim().toLowerCase();
         if (val.isEmpty()) return null;
 
-        // FIX 1: normalise val — replace hyphens/underscores with spaces so
+        // normalise val — replace hyphens/underscores with spaces so
         // "add-to-cart backpack" matches "add-to-cart-sauce-labs-backpack"
         String valN = val.replaceAll("[\\-_]", " ").replaceAll("\\s+", " ").trim();
 
@@ -612,13 +592,13 @@ public class SelfHealingEngine {
             else if ("data-testid".equals(attr) || "data-test".equals(attr)
                     || "data-qa".equals(attr))                                          cand = safe(c.dataTestId);
 
-            // FIX 1: normalise cand the same way
+            // FIX 1: normalise candidates the same way
             String candN = cand.toLowerCase().replaceAll("[\\-_]", " ").replaceAll("\\s+", " ").trim();
 
             // exact match after normalisation — highest priority
             if (candN.equals(valN)) { best = c; break; }
 
-            // FIX 1: removed the loose val.contains(cand) partial match that caused
+            //  removed the loose val.contains(cand) partial match that caused
             // react-burger-menu-btn to be picked. Only allow cand starts-with val
             if (best == null && containsAllTokens(candN, valN)) best = c;
         }
@@ -631,11 +611,9 @@ public class SelfHealingEngine {
         }
         return null;
     }
-    /**
-     * Extracts attribute values from XPath predicates and populates OldElement fields.
-     * e.g. //input[@placeholder='Username'] -> old.placeholder = "Username"
-     *      //button[contains(@data-test,'add-to-cart')] -> old.dataTestId = "add-to-cart"
-     */
+
+     // Extracts attribute values from XPath predicates and populates OldElement fields.
+
     private void enrichOldElementFromXpath(HealDTO.OldElement old, String xpath) {
         if (xpath == null || xpath.isBlank()) return;
         try {
