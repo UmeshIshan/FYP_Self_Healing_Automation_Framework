@@ -9,6 +9,7 @@ import java.util.Map;
 
 public class CandidateExtractor {
 
+    //AI assistance is used  when writing the CandidateExtractor code
     // WebDriver used to execute JavaScript inside the browser
     private final WebDriver driver;
 
