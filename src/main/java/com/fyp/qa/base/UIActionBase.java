@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
+//AI assistance was used for log creations
 public class UIActionBase {
 
     private final WebDriver driver;

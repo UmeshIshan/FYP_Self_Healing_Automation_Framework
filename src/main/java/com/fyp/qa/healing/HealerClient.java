@@ -29,7 +29,7 @@ public class HealerClient {
 
         String bodyJson = mapper.writeValueAsString(req);
 
-        // FIX: append /heal path if not already present
+        // append /heal path if not already present
         String url = apiUrl.endsWith("/heal") ? apiUrl : apiUrl.replaceAll("/+$", "") + "/heal";
 
         Request request = new Request.Builder()
@@ -37,7 +37,7 @@ public class HealerClient {
                 .post(RequestBody.create(bodyJson, JSON))
                 .build();
 
-        // FIX: retry once on timeout or 5xx — transient API blips should not abort the heal
+        // retry once on timeout or 5xx — transient API blips should not abort the heal
         IOException lastEx = null;
         Response response = null;
 
