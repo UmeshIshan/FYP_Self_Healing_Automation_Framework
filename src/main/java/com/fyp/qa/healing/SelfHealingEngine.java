@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 
 public class SelfHealingEngine {
-
+//AI has used to implement this class
     private static final Logger logger = LoggerFactory.getLogger(SelfHealingEngine.class);
 
     private final WebDriver driver;
@@ -57,7 +57,6 @@ public class SelfHealingEngine {
         // Infer old.type from action context — DOM constraint, not token assumption.
         // click + <input> can only ever have targeted type=submit or type=button.
         // Without this, type_match=0 for all candidates and idx_distance dominates,
-        // causing the model to pick user-name (idx=0) over login-button (idx=2).
         if (old.type == null || old.type.isBlank()) {
             String action = safe(config.actionName).toLowerCase();
             String tag    = safe(old.tag).toLowerCase();
@@ -152,6 +151,7 @@ public class SelfHealingEngine {
             // Extract candidates ONCE (tag-change resistant selector)
             String selector = actionSelector(config.actionName, expectedTag);
             List<HealDTO.Candidate> candidates = extractor.extract(config.maxCandidates, selector);
+            candidates = filterByTagGroup(candidates, expectedTag);
 
             // DEBUG: Print candidates sent to the API (ranker input)
             if (candidates != null) {
@@ -176,6 +176,16 @@ public class SelfHealingEngine {
                 }
             } else {
                 logger.info("HEAL DEBUG: candidates is NULL");
+            }
+
+
+            // ── TEXT LOCATOR REWRITE ───────────────────────────────────────────
+            if (isTextBasedXpath(oldXpath)) {
+                HealResult textRewrite = tryRewriteTextLocator(oldXpath, candidates);
+                if (textRewrite != null) {
+                    logger.info("TEXT_REWRITE: rewrote '{}' → '{}'", oldXpath, textRewrite.healedXpath);
+                    return textRewrite;
+                }
             }
 
 
@@ -215,6 +225,8 @@ public class SelfHealingEngine {
                 return result;
             }
 
+            result.confidence = Math.min(result.confidence, 1.0);
+
             int matches = countMatches(result.healedXpath);
             result.matchCount = matches;   // <-- store for audit/logging
 
@@ -222,7 +234,8 @@ public class SelfHealingEngine {
             if (config.allowVerifiedOverride
                     && matches == 1
                     && !"manual_review".equalsIgnoreCase(result.decision)
-                    && result.confidence >= config.confidenceThreshold) {
+                    && result.confidence >= config.confidenceThreshold
+                    && !isAbsolutePositionalXpath(result.healedXpath)) {
 
                 boolean sane;
 
@@ -498,10 +511,7 @@ public class SelfHealingEngine {
     }
 
     private String actionSelector(String actionName, String expectedTag) {
-        String a = safe(actionName).toLowerCase();
-        if (a.contains("gettext") || a.contains("asserttext") || a.contains("read")) {
-            return CandidateExtractor.SELECTOR_TEXT;
-        }
+        // Always use INTERACTIVE selector
         return CandidateExtractor.SELECTOR_INTERACTIVE;
     }
 
@@ -650,5 +660,159 @@ public class SelfHealingEngine {
         }
         return true;
     }
+
+    //tag wise filtering
+    private static final java.util.Map<String, java.util.List<String>> TAG_GROUPS =
+            java.util.Map.ofEntries(
+                    java.util.Map.entry("img",    java.util.List.of("img","svg","picture","canvas")),
+                    java.util.Map.entry("svg",    java.util.List.of("img","svg","picture","canvas")),
+                    java.util.Map.entry("button", java.util.List.of("button","a","input")),
+                    java.util.Map.entry("a",      java.util.List.of("a","button")),
+                    java.util.Map.entry("input",  java.util.List.of("input","button","select","textarea")),
+                    java.util.Map.entry("select", java.util.List.of("select","input")),
+                    java.util.Map.entry("div",    java.util.List.of("div","span","p","section","label",
+                            "h1","h2","h3","h4","h5","h6","li")),
+                    java.util.Map.entry("span",   java.util.List.of("span","div","p","label")),
+                    java.util.Map.entry("p",      java.util.List.of("p","div","span")),
+                    java.util.Map.entry("h1",     java.util.List.of("h1","h2","h3","h4","h5","h6","div","span")),
+                    java.util.Map.entry("h2",     java.util.List.of("h1","h2","h3","h4","h5","h6","div","span")),
+                    java.util.Map.entry("h3",     java.util.List.of("h1","h2","h3","h4","h5","h6","div","span"))
+            );
+
+    private List<HealDTO.Candidate> filterByTagGroup(
+            List<HealDTO.Candidate> candidates, String originalTag) {
+
+        if (originalTag == null || originalTag.isBlank() || candidates == null)
+            return candidates;
+
+        java.util.List<String> group = TAG_GROUPS.get(originalTag.toLowerCase());
+        if (group == null) return candidates; // unknown tag → no filter
+
+        // Tier 1: exact same tag
+        List<HealDTO.Candidate> tier1 = candidates.stream()
+                .filter(c -> originalTag.equalsIgnoreCase(safe(c.tag)))
+                .collect(java.util.stream.Collectors.toList());
+        if (!tier1.isEmpty()) {
+            logger.info("TAG_FILTER: Tier1 exact tag='{}' pool={}->{}",
+                    originalTag, candidates.size(), tier1.size());
+            return tier1;
+        }
+
+        // Tier 2: semantic tag group (button↔a, div - span, img -svg)
+        final java.util.List<String> finalGroup = group;
+        List<HealDTO.Candidate> tier2 = candidates.stream()
+                .filter(c -> finalGroup.contains(safe(c.tag).toLowerCase()))
+                .collect(java.util.stream.Collectors.toList());
+        if (!tier2.isEmpty()) {
+            logger.info("TAG_FILTER: Tier2 group for tag='{}' pool={}->{}",
+                    originalTag, candidates.size(), tier2.size());
+            return tier2;
+        }
+
+        // Tier 3: no filter — tag changed completely, let ML decide
+        logger.info("TAG_FILTER: Tier3 no filter for tag='{}' (no same-group candidates)", originalTag);
+        return candidates;
+    }
+
+    //clean the candidate text before comparison
+    private String cleanCandidateText(String rawText, String id, String dataTestId) {
+        String text = rawText == null ? "" : rawText.trim();
+        java.util.List<String> suffixes = new java.util.ArrayList<>();
+        if (id != null && !id.trim().isEmpty())             suffixes.add(id.trim());
+        if (dataTestId != null && !dataTestId.trim().isEmpty()) suffixes.add(dataTestId.trim());
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (String suffix : suffixes) {
+                if (!suffix.isEmpty() && text.endsWith(" " + suffix)) {
+                    text = text.substring(0, text.length() - suffix.length() - 1).trim();
+                    changed = true;
+                }
+            }
+        }
+        return text;
+    }
+
+
+    //Determines whether the given XPath expression is text-based.
+    private boolean isTextBasedXpath(String xp) {
+        if (xp == null) return false;
+        String lower = xp.toLowerCase();
+        return lower.contains("text()=") || lower.contains("text(),'") ||
+                lower.contains("text()=\"") || lower.contains("contains(text()");
+    }
+
+    //Extracts the literal text value from a text-based XPath expression
+    private String extractTextFromXpath(String xp) {
+        if (xp == null) return "";
+        java.util.regex.Matcher m1 = java.util.regex.Pattern
+                .compile("contains\\(text\\(\\)\\s*,\\s*['\"]([^'\"]+)['\"]")
+                .matcher(xp);
+        if (m1.find()) return m1.group(1);
+        java.util.regex.Matcher m2 = java.util.regex.Pattern
+                .compile("text\\(\\)\\s*=\\s*['\"]([^'\"]+)['\"]")
+                .matcher(xp);
+        if (m2.find()) return m2.group(1);
+        return "";
+    }
+
+    //Attempts to repair a broken text-based XPath by rewriting it using semantically similar text from candidate elements.
+    private HealResult tryRewriteTextLocator(String oldXpath, List<HealDTO.Candidate> candidates) {
+        String oldText = extractTextFromXpath(oldXpath);
+        if (oldText.isEmpty() || candidates == null || candidates.isEmpty()) return null;
+        try {
+            List<WebElement> existing = driver.findElements(By.xpath(oldXpath));
+            if (!existing.isEmpty()) return null;
+        } catch (Exception ignored) {}
+        String normOld = norm(oldText);
+        HealDTO.Candidate best = null;
+        double bestSim = 0.55;
+        for (HealDTO.Candidate c : candidates) {
+            String cText = cleanCandidateText(safe(c.text), safe(c.id), safe(c.dataTestId));
+            if (cText.isEmpty()) continue;
+            double sim = seqSim(normOld, norm(cText));
+            if (sim > bestSim) { bestSim = sim; best = c; }
+        }
+        if (best == null) return null;
+        String newText = cleanCandidateText(safe(best.text), safe(best.id), safe(best.dataTestId));
+        String tag = oldXpath.replaceAll("^//([a-zA-Z*]+).*", "$1");
+        if (tag.equals(oldXpath)) tag = "*";
+        String newXpath = oldXpath.toLowerCase().contains("contains(text()")
+                ? "//" + tag + "[contains(text(),'" + newText.replace("'", "\\'") + "')]"
+                : "//" + tag + "[text()='" + newText.replace("'", "\\'") + "']";
+        try {
+            if (driver.findElements(By.xpath(newXpath)).isEmpty()) return null;
+        } catch (Exception e) { return null; }
+        logger.info("TEXT_REWRITE: oldText='{}' → newText='{}' sim={} xpath='{}'",
+                oldText, newText, String.format("%.3f", bestSim), newXpath);
+        return new HealResult(By.xpath(newXpath), newXpath, 0.95, "AUTO_HEAL_TEXT_REWRITE");
+    }
+
+    //Computes sequence similarity between two strings using
+    private double seqSim(String a, String b) {
+        if (a == null || b == null) return 0.0;
+        if (a.isEmpty() && b.isEmpty()) return 1.0;
+        if (a.isEmpty() || b.isEmpty()) return 0.0;
+        int la = a.length(), lb = b.length();
+        int[][] dp = new int[la + 1][lb + 1];
+        for (int i = 1; i <= la; i++)
+            for (int j = 1; j <= lb; j++)
+                dp[i][j] = a.charAt(i-1) == b.charAt(j-1)
+                        ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+        return 2.0 * dp[la][lb] / (la + lb);
+    }
+
+    //Normalizes a string for comparison
+    private String norm(String s) {
+        if (s == null) return "";
+        return s.toLowerCase().replaceAll("[^a-z0-9]+", " ").trim();
+    }
+
+    //Checks whether the given XPath is an absolute positional XPath.
+    private boolean isAbsolutePositionalXpath(String xp) {
+        if (xp == null) return false;
+        return xp.startsWith("//html[1]/body[1]/");
+    }
+
 
 }

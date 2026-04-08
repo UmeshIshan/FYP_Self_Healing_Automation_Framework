@@ -17,7 +17,7 @@ public class HealingConfig {
 
     // Now reads from env var so it can be tuned without recompiling.
     private static double defaultThreshold() {
-        return 0.5d;
+        return 0.50d;
     }
 
     public HealingConfig() {
